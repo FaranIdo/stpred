@@ -14,6 +14,7 @@ BATCH_SIZE = 2048  # Batch size for training
 SEQUENCE_LENGTH = 10  # Number of timesteps to use for prediction
 EPOCHS = 20
 DATA_SAMPLE_PERCENTAGE = 0.50  # Percentage of data to use for training and validation
+LEARNING_RATE = 1e-3
 
 class NDVIDataset(Dataset):
     """Dataset for NDVI time series data"""
@@ -106,7 +107,7 @@ def setup_model(device: torch.device) -> tuple[SpatioTemporalPredictor, torch.op
     """Initialize model, optimizer and loss function"""
     model = SpatioTemporalPredictor(d_model=256, patch_size=PATCH_SIZE, ndvi_embed_dim=32, year_embed_dim=8, latlon_embed_dim=8, num_heads=8, num_layers=3, dropout=0.1).to(device)
 
-    optimizer = Adam(model.parameters(), lr=1e-4)
+    optimizer = Adam(model.parameters(), lr=LEARNING_RATE)
     criterion = MSELoss()
 
     return model, optimizer, criterion
