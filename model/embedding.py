@@ -198,7 +198,7 @@ def test_time_series_embedder():
     embedder = TimeSeriesEmbedder(
         d_model=d_model,
         patch_size=patch_size,
-        ndvi_embed_dim=4,
+        ndvi_embed_dim=32,
         year_embed_dim=4,
         latlon_embed_dim=4,
         use_positional_encoding=True,
