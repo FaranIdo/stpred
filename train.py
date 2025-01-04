@@ -5,12 +5,15 @@ from model.stpred import SpatioTemporalPredictor
 from torch.optim import Adam
 from torch.nn import MSELoss
 from tqdm import tqdm
+import os
+from datetime import datetime
 
 # Training constants
 PATCH_SIZE = 3  # Size of NDVI patches (must be odd)
 BATCH_SIZE = 2048  # Batch size for training
 SEQUENCE_LENGTH = 10  # Number of timesteps to use for prediction
 EPOCHS = 20
+DATA_SAMPLE_PERCENTAGE = 0.50  # Percentage of data to use for training and validation
 
 class NDVIDataset(Dataset):
     """Dataset for NDVI time series data"""
@@ -34,6 +37,11 @@ class NDVIDataset(Dataset):
             for h in range(self.pad_size, data.shape[1] - self.pad_size):
                 for w in range(self.pad_size, data.shape[2] - self.pad_size):
                     self.valid_indices.append((t, h, w))
+
+        # Sample only a percentage of the data
+        num_samples = int(len(self.valid_indices) * DATA_SAMPLE_PERCENTAGE)
+        indices = np.random.choice(len(self.valid_indices), size=num_samples, replace=False)
+        self.valid_indices = [self.valid_indices[i] for i in indices]
 
     def __len__(self) -> int:
         return len(self.valid_indices)
@@ -158,8 +166,15 @@ def validate(model: torch.nn.Module, val_loader: DataLoader, criterion: torch.nn
     return val_loss / val_batches
 
 
-def save_checkpoint(model: torch.nn.Module, optimizer: torch.optim.Optimizer, epoch: int, train_loss: float, val_loss: float, filename: str = "best_model.pt") -> None:
-    """Save model checkpoint"""
+def save_checkpoint(model: torch.nn.Module, optimizer: torch.optim.Optimizer, epoch: int, train_loss: float, val_loss: float) -> None:
+    """Save model checkpoint with timestamp in checkpoints directory"""
+    # Create checkpoints directory if it doesn't exist
+    os.makedirs("checkpoints", exist_ok=True)
+
+    # Generate filename with timestamp
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"checkpoints/model_epoch{epoch:03d}_{timestamp}_valloss{val_loss:.6f}.pt"
+
     torch.save(
         {
             "epoch": epoch,
@@ -167,10 +182,11 @@ def save_checkpoint(model: torch.nn.Module, optimizer: torch.optim.Optimizer, ep
             "optimizer_state_dict": optimizer.state_dict(),
             "train_loss": train_loss,
             "val_loss": val_loss,
+            "timestamp": datetime.now().isoformat(),
         },
         filename,
     )
-    print("Saved new best model!")
+    print(f"Saved checkpoint: {filename}")
 
 
 def train() -> None:
