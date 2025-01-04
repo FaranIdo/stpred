@@ -3,6 +3,7 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from model.stpred import SpatioTemporalPredictor
 from torch.optim import Adam
+from torch.optim.lr_scheduler import ExponentialLR
 from torch.nn import MSELoss
 from tqdm import tqdm
 import os
@@ -13,8 +14,10 @@ PATCH_SIZE = 3  # Size of NDVI patches (must be odd)
 BATCH_SIZE = 2048  # Batch size for training
 SEQUENCE_LENGTH = 10  # Number of timesteps to use for prediction
 EPOCHS = 20
-DATA_SAMPLE_PERCENTAGE = 0.50  # Percentage of data to use for training and validation
-LEARNING_RATE = 1e-3
+WARMUP_EPOCHS = 5  # Number of epochs to keep learning rate constant
+DATA_SAMPLE_PERCENTAGE = 0.5  # Percentage of data to use for training and validation
+LEARNING_RATE = 1e-3  # Starting learning rate
+DECAY_GAMMA = 0.95  # Decay rate for learning rate scheduler
 
 class NDVIDataset(Dataset):
     """Dataset for NDVI time series data"""
@@ -103,14 +106,15 @@ def create_train_val_split(
     return train_loader, val_loader
 
 
-def setup_model(device: torch.device) -> tuple[SpatioTemporalPredictor, torch.optim.Optimizer, torch.nn.Module]:
-    """Initialize model, optimizer and loss function"""
+def setup_model(device: torch.device) -> tuple[SpatioTemporalPredictor, torch.optim.Optimizer, torch.optim.lr_scheduler.LRScheduler, torch.nn.Module]:
+    """Initialize model, optimizer, scheduler and loss function"""
     model = SpatioTemporalPredictor(d_model=256, patch_size=PATCH_SIZE, ndvi_embed_dim=32, year_embed_dim=8, latlon_embed_dim=8, num_heads=8, num_layers=3, dropout=0.1).to(device)
 
     optimizer = Adam(model.parameters(), lr=LEARNING_RATE)
+    scheduler = ExponentialLR(optimizer, gamma=DECAY_GAMMA)
     criterion = MSELoss()
 
-    return model, optimizer, criterion
+    return model, optimizer, scheduler, criterion
 
 
 def train_epoch(model: torch.nn.Module, train_loader: DataLoader, optimizer: torch.optim.Optimizer, criterion: torch.nn.Module, device: torch.device, epoch: int, num_epochs: int) -> float:
@@ -204,7 +208,7 @@ def train() -> None:
     train_loader, val_loader = create_train_val_split(data, train_years=(1984, 2014), val_years=(2015, 2024), sequence_length=SEQUENCE_LENGTH, patch_size=PATCH_SIZE)
 
     # Setup model, optimizer and criterion
-    model, optimizer, criterion = setup_model(device)
+    model, optimizer, scheduler, criterion = setup_model(device)
 
     # Training parameters
     best_val_loss = float("inf")
@@ -217,10 +221,17 @@ def train() -> None:
         # Validation phase
         avg_val_loss = validate(model, val_loader, criterion, device)
 
+        # Step the scheduler after warm-up period
+        if epoch >= WARMUP_EPOCHS:
+            scheduler.step()
+
         # Print epoch summary
         print(f"\nEpoch {epoch+1}/{EPOCHS}")
         print(f"Train Loss: {avg_train_loss:.6f}")
         print(f"Val Loss: {avg_val_loss:.6f}")
+        print(f"Learning Rate: {scheduler.get_last_lr()[0]:.6f}")
+        if epoch < WARMUP_EPOCHS:
+            print("(Warm-up period - Learning rate constant)")
 
         # Save best model
         if avg_val_loss < best_val_loss:
