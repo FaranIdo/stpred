@@ -1,127 +1,137 @@
+import math
 import torch
 import torch.nn as nn
-import torch.optim as optim
-import math
-import matplotlib.pyplot as plt
-import seaborn as sns
 
 
-class ContinuousTemporalEncoding(nn.Module):
-    def __init__(self, d_model, start_year, end_year, num_seasons=2):
-        super(ContinuousTemporalEncoding, self).__init__()
-        self.d_model = d_model
-        self.start_year = start_year
-        self.end_year = end_year
-        self.num_seasons = num_seasons
-        self.total_periods = (end_year - start_year + 1) * num_seasons
+class SinusoidalPositionalEncoding(nn.Module):
+    """
+    Classic sinusoidal positional encoding from the "Attention is All You Need" paper.
+    """
 
-        self.time_encode = nn.Linear(d_model, d_model)
+    def __init__(self, d_model, max_len=5000):
+        super().__init__()
+        # Create a long enough P matrix of shape [max_len, d_model]
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        # Compute the div term (1 / 10000^(2i/d_model))
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        # Fill pe[:, 0::2] with sin, pe[:, 1::2] with cos
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        # Register as a buffer so it’s not a learnable parameter
+        self.register_buffer("pe", pe.unsqueeze(0))  # shape: [1, max_len, d_model]
 
-    def forward(self, years, seasons):
-        # Create a continuous time value
-        time = (years - self.start_year) * self.num_seasons + seasons
-        normalized_time = time.float() / self.total_periods
-
-        # Create cyclic features
-        angles = 2 * math.pi * normalized_time.unsqueeze(-1) * torch.arange(1, self.d_model // 2).float().to(years.device) / (self.d_model // 2)
-        sines = torch.sin(angles)
-        cosines = torch.cos(angles)
-
-        # Combine linear and cyclic features
-        time_features = torch.cat([normalized_time.unsqueeze(-1), sines, cosines], dim=-1)
-
-        # Ensure the tensor has the correct size
-        if time_features.size(-1) < self.d_model:
-            padding = torch.zeros(*time_features.shape[:-1], self.d_model - time_features.size(-1)).to(years.device)
-            time_features = torch.cat([time_features, padding], dim=-1)
-
-        return self.time_encode(time_features)
+    def forward(self, x):
+        """
+        x: (batch_size, seq_len, d_model)
+        returns: (batch_size, seq_len, d_model) with added positional encoding
+        """
+        seq_len = x.size(1)
+        # Add the positional encoding up to seq_len
+        x = x + self.pe[:, :seq_len, :]
+        return x
 
 
-def test_temporal_encoding():
-    class NDVIModel(nn.Module):
-        def __init__(self, d_model, start_year, end_year, num_seasons=2):
-            super(NDVIModel, self).__init__()
-            self.temporal_encoding = ContinuousTemporalEncoding(d_model, start_year, end_year, num_seasons)
-            self.fc = nn.Linear(d_model, 1)
+class CyclicalMonthEncoder(nn.Module):
+    """Encodes months (1-12) into cyclical sine/cosine features."""
 
-        def forward(self, years, seasons):
-            encoding = self.temporal_encoding(years, seasons)
-            return self.fc(encoding)
+    def __init__(self) -> None:
+        super().__init__()
 
-    def generate_dummy_data(start_year, end_year, num_seasons, num_samples):
-        years = torch.randint(start_year, end_year + 1, (num_samples,))
-        seasons = torch.randint(0, num_seasons, (num_samples,))
-        time = (years - start_year) * num_seasons + seasons
-        normalized_time = time.float() / ((end_year - start_year + 1) * num_seasons)
+    def forward(self, month: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            month: Tensor of shape (batch_size, seq_len) with values in [1..12]
+        Returns:
+            month_features: Tensor of shape (batch_size, seq_len, 2) containing sin/cos features
+        """
+        month_sin = torch.sin(2 * math.pi * (month / 12.0))
+        month_cos = torch.cos(2 * math.pi * (month / 12.0))
+        return torch.stack([month_sin, month_cos], dim=-1)
 
-        annual_cycle = torch.sin(2 * math.pi * normalized_time)
-        long_term_trend = 0.2 * normalized_time
-        noise = 0.1 * torch.randn(num_samples)
-        ndvi = 0.5 + 0.2 * annual_cycle + long_term_trend + noise
-        ndvi = torch.clamp(ndvi, 0, 1)
 
-        return years, seasons, ndvi
+class TimeSeriesEmbedder(nn.Module):
+    """
+    Embeds NDVI, cyclical month, and (year - first_year) into a d_model-dimensional vector.
+    Optionally adds sinusoidal positional encoding.
+    """
 
-    # Set up parameters
-    d_model = 128
-    start_year = 1979
-    end_year = 2014
-    num_seasons = 2
-    num_samples = 10000
-    num_epochs = 100
+    def __init__(self, d_model: int, ndvi_embed_dim: int = 8, year_embed_dim: int = 8, use_positional_encoding: bool = True, max_seq_len: int = 5000, first_year: int = 1984):
+        """
+        Args:
+            d_model: Final dimension for Transformer input.
+            ndvi_embed_dim: Dimension of the embedding we learn for NDVI.
+            year_embed_dim: Dimension of the embedding we learn for Year.
+            use_positional_encoding: Whether to add sinusoidal PE.
+            max_seq_len: Maximum sequence length we might need (for positional encoding).
+            first_year: Integer or float used to shift the year so it's smaller (e.g. year-2000). First year in the dataset.
+        """
+        super().__init__()
+        self.first_year = first_year
+        self.ndvi_embed = nn.Linear(1, ndvi_embed_dim)  # NDVI -> embedding
+        self.year_embed = nn.Linear(1, year_embed_dim)  # Year -> embedding
+        self.month_encoder = CyclicalMonthEncoder()
 
-    # Create model and optimizer
-    model = NDVIModel(d_model, start_year, end_year, num_seasons)
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
-    criterion = nn.MSELoss()
+        # Combine dimension: ndvi_embed_dim + 2 (month sin/cos) + year_embed_dim
+        combined_dim = ndvi_embed_dim + 2 + year_embed_dim
+        self.final_proj = nn.Linear(combined_dim, d_model)
 
-    # Generate data and train
-    train_years, train_seasons, train_ndvi = generate_dummy_data(start_year, end_year, num_seasons, num_samples)
+        # Positional encoding
+        self.use_positional_encoding = use_positional_encoding
+        if use_positional_encoding:
+            self.pos_encoder = SinusoidalPositionalEncoding(d_model, max_len=max_seq_len)
 
-    for epoch in range(num_epochs):
-        model.train()
-        optimizer.zero_grad()
-        output = model(train_years, train_seasons)
-        loss = criterion(output.squeeze(), train_ndvi)
-        loss.backward()
-        optimizer.step()
-        if (epoch + 1) % 10 == 0:
-            print(f"Epoch [{epoch+1}/{num_epochs}], Loss: {loss.item():.4f}")
+    def forward(self, ndvi: torch.Tensor, month: torch.Tensor, year: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            ndvi: Tensor of shape (batch_size, seq_len) containing NDVI values
+            month: Tensor of shape (batch_size, seq_len) with values in [1..12]
+            year: Tensor of shape (batch_size, seq_len) with float years
+        Returns:
+            embeddings: Tensor of shape (batch_size, seq_len, d_model)
+        """
+        ndvi_3d = ndvi.unsqueeze(-1)
+        year_3d = (year - self.first_year).unsqueeze(-1)
 
-    # Evaluation
-    model.eval()
-    with torch.no_grad():
-        years = torch.tensor([1979, 1980, 1980, 1981, 1981, 1982, 1990, 2000, 2014, 2014])
-        seasons = torch.tensor([1, 0, 1, 0, 1, 0, 0, 0, 0, 1])
-        labels = [f"{year}-{'Winter' if season == 0 else 'Summer'}" for year, season in zip(years, seasons)]
+        # Get embeddings for each component
+        ndvi_e = self.ndvi_embed(ndvi_3d)
+        year_e = self.year_embed(year_3d)
+        month_e = self.month_encoder(month)  # Returns (batch, seq_len, 2)
 
-        encodings = model.temporal_encoding(years, seasons)
+        # Concatenate all features
+        combined = torch.cat([ndvi_e, month_e, year_e], dim=-1)
 
-        num_points = len(years)
-        similarity_matrix = torch.zeros((num_points, num_points))
+        # Final projection
+        x = self.final_proj(combined)
 
-        for i in range(num_points):
-            for j in range(num_points):
-                similarity_matrix[i, j] = torch.nn.functional.cosine_similarity(encodings[i], encodings[j], dim=0)
+        # Optionally add positional encoding
+        if self.use_positional_encoding:
+            x = self.pos_encoder(x)
 
-        plt.figure(figsize=(12, 10))
-        sns.heatmap(similarity_matrix.numpy(), annot=True, fmt=".2f", cmap="YlOrRd", xticklabels=labels, yticklabels=labels)
-        plt.title("Cosine Similarity Between Encoded Time Points")
-        plt.tight_layout()
-        plt.savefig("continuous_temporal_encoding_heatmap.png")
-        print("Heatmap saved as 'continuous_temporal_encoding_heatmap.png'")
-        plt.close()
+        return x
 
-        print("\nSpecific Comparisons (Cosine Similarity):")
-        print(f"1979-Summer vs 1980-Winter: {similarity_matrix[0, 1]:.4f}")
-        print(f"1980-Winter vs 1980-Summer: {similarity_matrix[1, 2]:.4f}")
-        print(f"1980-Summer vs 1981-Winter: {similarity_matrix[2, 3]:.4f}")
-        print(f"1980-Winter vs 1981-Winter: {similarity_matrix[1, 3]:.4f}")
-        print(f"1980-Winter vs 1990-Winter: {similarity_matrix[1, 6]:.4f}")
-        print(f"1980-Winter vs 2014-Winter: {similarity_matrix[1, 8]:.4f}")
-        print(f"2014-Winter vs 2014-Summer: {similarity_matrix[8, 9]:.4f}")
+
+def test_time_series_embedder():
+    batch_size = 2
+    seq_len = 5
+    d_model = 16
+
+    # Dummy inputs
+    ndvi = torch.rand(batch_size, seq_len)  # e.g., NDVI in [0..1]
+    month = torch.randint(1, 13, (batch_size, seq_len))  # months in 1..12
+    year = 2000 + torch.randint(0, 5, (batch_size, seq_len), dtype=torch.float)  # Convert to float
+    first_year = 2000
+
+    # print shape of inputs
+    print("ndvi shape:", ndvi.shape)
+    print("month shape:", month.shape)
+    print("year shape:", year.shape)
+
+    embedder = TimeSeriesEmbedder(d_model=d_model, ndvi_embed_dim=8, year_embed_dim=8, first_year=first_year)
+
+    embeddings = embedder(ndvi, month, year)
+    print("embeddings shape:", embeddings.shape)  # (batch_size, seq_len, d_model)
 
 
 if __name__ == "__main__":
-    test_temporal_encoding()
+    test_time_series_embedder()

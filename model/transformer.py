@@ -38,11 +38,11 @@ class TemporalPositionalNDVITransformer(nn.Module):
             embedding_dim (int): The dimension of the model.
             attn_heads (int): The number of attention heads.
             num_encoder_layers (int): The number of encoder layers.
-            sequence_length (int): The length of the time series sequence - how many timesteps the network looks at to predict the next timestep
+            sequence_length (int): The length of the time series sequence - how many timesteps backwards the network looks at to predict the next timestep
             start_year (int): The starting year for temporal encoding.
             end_year (int): The ending year for temporal encoding.
             max_seq_length (int, optional): The maximum sequence length for positional encoding. Defaults to 50.
-            num_features (int, optional): The number of input features. Defaults to 1.
+            num_features (int, optional): The number of input features. Defaults to 1 = only NDVI
             dropout_rate (float, optional): The dropout rate. Defaults to 0.1.
         """
         super(TemporalPositionalNDVITransformer, self).__init__()
@@ -61,7 +61,7 @@ class TemporalPositionalNDVITransformer(nn.Module):
         # Temporal encoding
         self.temporal_encoding = ContinuousTemporalEncoding(embedding_dim, start_year, end_year)
 
-        # Positional encoding - Captture the order of values in the input sequence
+        # Positional encoding - Capture the order of values in the input sequence
         self.positional_encoding = SequencePositionalEncoding(embedding_dim, max_seq_length)
 
         # Dropout
