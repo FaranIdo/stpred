@@ -50,88 +50,178 @@ class CyclicalMonthEncoder(nn.Module):
         return torch.stack([month_sin, month_cos], dim=-1)
 
 
-class TimeSeriesEmbedder(nn.Module):
+class LatLonEncoder(nn.Module):
     """
-    Embeds NDVI, cyclical month, and (year - first_year) into a d_model-dimensional vector.
-    Optionally adds sinusoidal positional encoding.
+    Converts latitude/longitude in degrees to (x, y, z) on a unit sphere,
+    then applies a linear layer to get a lat-lon embedding of dimension embed_dim.
     """
 
-    def __init__(self, d_model: int, ndvi_embed_dim: int = 8, year_embed_dim: int = 8, use_positional_encoding: bool = True, max_seq_len: int = 5000, first_year: int = 1984):
+    def __init__(self, embed_dim: int = 8):
+        """
+        Args:
+            embed_dim: dimension of the embedding returned for each (lat, lon).
+        """
+        super().__init__()
+        # We'll embed from 3 features (x, y, z) -> embed_dim
+        self.linear = nn.Linear(3, embed_dim)
+
+    def forward(self, lat_deg: torch.Tensor, lon_deg: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            lat_deg: (batch_size, seq_len) of latitudes in degrees
+            lon_deg: (batch_size, seq_len) of longitudes in degrees
+        Returns:
+            latlon_embed: (batch_size, seq_len, embed_dim)
+        """
+        # 1) Convert degrees -> radians
+        lat_rad = lat_deg * math.pi / 180.0
+        lon_rad = lon_deg * math.pi / 180.0
+
+        # 2) Convert to (x, y, z) on the unit sphere
+        x = torch.cos(lat_rad) * torch.cos(lon_rad)
+        y = torch.cos(lat_rad) * torch.sin(lon_rad)
+        z = torch.sin(lat_rad)
+
+        # 3) Stack into shape (batch_size, seq_len, 3)
+        xyz = torch.stack([x, y, z], dim=-1)
+
+        # 4) Linear embedding (3 -> embed_dim)
+        latlon_embed = self.linear(xyz)
+        return latlon_embed
+
+
+class TimeSeriesEmbedder(nn.Module):
+    """
+    Embeds NDVI, cyclical month, (year - first_year), and lat/lon
+    into a d_model-dimensional vector. Optionally adds sinusoidal positional encoding.
+    """
+
+    def __init__(
+        self,
+        d_model: int,
+        ndvi_embed_dim: int = 8,
+        year_embed_dim: int = 8,
+        latlon_embed_dim: int = 8,  # dimension for (lat, lon) embedding
+        use_positional_encoding: bool = True,
+        max_seq_len: int = 5000,
+        first_year: int = 1984,
+    ):
         """
         Args:
             d_model: Final dimension for Transformer input.
             ndvi_embed_dim: Dimension of the embedding we learn for NDVI.
             year_embed_dim: Dimension of the embedding we learn for Year.
+            latlon_embed_dim: Dimension of the embedding for (lat, lon).
             use_positional_encoding: Whether to add sinusoidal PE.
-            max_seq_len: Maximum sequence length we might need (for positional encoding).
-            first_year: Integer or float used to shift the year so it's smaller (e.g. year-2000). First year in the dataset.
+            max_seq_len: Maximum sequence length for positional encoding.
+            first_year: integer/float for shifting the year (e.g. year-2000).
         """
         super().__init__()
         self.first_year = first_year
+
+        # NDVI and year embeddings
         self.ndvi_embed = nn.Linear(1, ndvi_embed_dim)  # NDVI -> embedding
         self.year_embed = nn.Linear(1, year_embed_dim)  # Year -> embedding
+
+        # Month encoder -> 2 features (sin, cos)
         self.month_encoder = CyclicalMonthEncoder()
 
-        # Combine dimension: ndvi_embed_dim + 2 (month sin/cos) + year_embed_dim
-        combined_dim = ndvi_embed_dim + 2 + year_embed_dim
+        # Lat/lon encoder (handles the lat-lon -> (x,y,z) -> linear)
+        self.latlon_encoder = LatLonEncoder(embed_dim=latlon_embed_dim)
+
+        # Combine dimension:
+        #   NDVI + Month(2) + Year + LatLonEmbed
+        combined_dim = ndvi_embed_dim + 2 + year_embed_dim + latlon_embed_dim
+
+        # Final projection to d_model
         self.final_proj = nn.Linear(combined_dim, d_model)
 
-        # Positional encoding
+        # (Optional) Positional Encoding
         self.use_positional_encoding = use_positional_encoding
         if use_positional_encoding:
             self.pos_encoder = SinusoidalPositionalEncoding(d_model, max_len=max_seq_len)
 
-    def forward(self, ndvi: torch.Tensor, month: torch.Tensor, year: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        ndvi: torch.Tensor,
+        month: torch.Tensor,
+        year: torch.Tensor,
+        lat_deg: torch.Tensor,
+        lon_deg: torch.Tensor,
+    ) -> torch.Tensor:
         """
         Args:
-            ndvi: Tensor of shape (batch_size, seq_len) containing NDVI values
-            month: Tensor of shape (batch_size, seq_len) with values in [1..12]
-            year: Tensor of shape (batch_size, seq_len) with float years
+            ndvi: (batch_size, seq_len) NDVI values
+            month: (batch_size, seq_len) months in [1..12] (e.g. 1, 2, 3, ..., 12)
+            year: (batch_size, seq_len) float years (e.g. 2000.0)
+            lat_deg: (batch_size, seq_len) latitude in degrees (e.g. 30.0)
+            lon_deg: (batch_size, seq_len) longitude in degrees (e.g. 30.0)
         Returns:
-            embeddings: Tensor of shape (batch_size, seq_len, d_model)
+            embeddings: (batch_size, seq_len, d_model)
         """
-        ndvi_3d = ndvi.unsqueeze(-1)
-        year_3d = (year - self.first_year).unsqueeze(-1)
+        # --- 1) NDVI Embedding
+        ndvi_3d = ndvi.unsqueeze(-1)  # (batch, seq_len, 1)
+        ndvi_e = self.ndvi_embed(ndvi_3d)  # (batch, seq_len, ndvi_embed_dim)
 
-        # Get embeddings for each component
-        ndvi_e = self.ndvi_embed(ndvi_3d)
-        year_e = self.year_embed(year_3d)
-        month_e = self.month_encoder(month)  # Returns (batch, seq_len, 2)
+        # --- 2) Year Embedding (shifted by first_year)
+        year_shifted = (year.float() - self.first_year).unsqueeze(-1)  # (batch, seq_len, 1)
+        year_e = self.year_embed(year_shifted)  # (batch, seq_len, year_embed_dim)
 
-        # Concatenate all features
-        combined = torch.cat([ndvi_e, month_e, year_e], dim=-1)
+        # --- 3) Month -> cyclical (2D)
+        month_e = self.month_encoder(month)  # (batch, seq_len, 2)
 
-        # Final projection
-        x = self.final_proj(combined)
+        # --- 4) Lat/Lon -> (x, y, z) -> linear embedding
+        latlon_e = self.latlon_encoder(lat_deg, lon_deg)  # (batch, seq_len, latlon_embed_dim)
 
-        # Optionally add positional encoding
+        # --- 5) Concatenate all features
+        combined = torch.cat([ndvi_e, month_e, year_e, latlon_e], dim=-1)
+
+        # --- 6) Final projection to d_model
+        x_out = self.final_proj(combined)
+
+        # --- 7) (Optional) Sinusoidal positional encoding
         if self.use_positional_encoding:
-            x = self.pos_encoder(x)
+            x_out = self.pos_encoder(x_out)
 
-        return x
+        return x_out
 
 
 def test_time_series_embedder():
-    batch_size = 2
-    seq_len = 5
+    batch_size, seq_len = 2, 5
     d_model = 16
 
-    # Dummy inputs
-    ndvi = torch.rand(batch_size, seq_len)  # e.g., NDVI in [0..1]
-    month = torch.randint(1, 13, (batch_size, seq_len))  # months in 1..12
-    year = 2000 + torch.randint(0, 5, (batch_size, seq_len), dtype=torch.float)  # Convert to float
-    first_year = 2000
+    # Create the embedder
+    embedder = TimeSeriesEmbedder(
+        d_model=d_model,
+        ndvi_embed_dim=4,
+        year_embed_dim=4,
+        latlon_embed_dim=4,
+        use_positional_encoding=True,
+        max_seq_len=500,
+        first_year=1984,
+    )
 
-    # print shape of inputs
-    print("ndvi shape:", ndvi.shape)
-    print("month shape:", month.shape)
-    print("year shape:", year.shape)
+    # Example input data
+    ndvi = torch.rand(batch_size, seq_len) * 0.3  # NDVI in [0..0.3]
+    month = torch.randint(1, 13, (batch_size, seq_len))  # months [1..12]
+    year = 1984 + torch.randint(0, 35, (batch_size, seq_len))  # random years
+    lat = torch.full((batch_size, seq_len), 31.76)  # ~31.76 deg
+    lon = torch.full((batch_size, seq_len), 34.77)  # ~34.77 deg
 
-    embedder = TimeSeriesEmbedder(d_model=d_model, ndvi_embed_dim=8, year_embed_dim=8, first_year=first_year)
-
-    embeddings = embedder(ndvi, month, year)
-    print("embeddings shape:", embeddings.shape)  # (batch_size, seq_len, d_model)
+    # Get embeddings
+    embeddings = embedder(ndvi, month, year, lat, lon)
+    print("Output embeddings shape:", embeddings.shape)
 
 
 if __name__ == "__main__":
     test_time_series_embedder()
+
+    # def _init_weights(self, m):
+    #     if isinstance(m, nn.Linear):
+    #         # we use xavier_uniform following official JAX ViT:
+    #         torch.nn.init.xavier_uniform_(m.weight)
+    #         if isinstance(m, nn.Linear) and m.bias is not None:
+    #             nn.init.constant_(m.bias, 0)
+    #     elif isinstance(m, nn.LayerNorm):
+    #         nn.init.constant_(m.bias, 0)
+    #         nn.init.constant_(m.weight, 1.0)
