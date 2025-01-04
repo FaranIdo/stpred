@@ -5,7 +5,8 @@ from torch.nn import TransformerEncoderLayer, TransformerEncoder
 
 
 class TimeSeriesTransformer(nn.Module):
-    def __init__(self, d_model: int, num_heads: int, num_layers: int, d_ff: int = 2048, dropout: float = 0.1, num_classes: int = 1, activation: str = "relu") -> None:
+
+    def __init__(self, d_model: int, num_heads: int, num_layers: int, d_ff: int = 512, dropout: float = 0.1, activation: str = "relu") -> None:
         """Transformer model for time series prediction.
 
         Args:

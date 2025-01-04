@@ -8,8 +8,8 @@ from tqdm import tqdm
 
 # Training constants
 PATCH_SIZE = 3  # Size of NDVI patches (must be odd)
-BATCH_SIZE = 32  # Batch size for training
-SEQUENCE_LENGTH = 5  # Number of timesteps to use for prediction
+BATCH_SIZE = 1024  # Batch size for training
+SEQUENCE_LENGTH = 10  # Number of timesteps to use for prediction
 
 
 class NDVIDataset(Dataset):

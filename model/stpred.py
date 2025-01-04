@@ -15,16 +15,16 @@ class SpatioTemporalPredictor(nn.Module):
 
     def __init__(
         self,
-        d_model: int = 256,
+        d_model: int = 128,
         patch_size: int = 1,
         ndvi_embed_dim: int = 32,
         year_embed_dim: int = 8,
         latlon_embed_dim: int = 8,
         num_heads: int = 8,
-        num_layers: int = 3,
-        d_ff: int = 1024,
-        dropout: float = 0.1,
-        max_seq_len: int = 5000,
+        num_layers: int = 2,
+        d_ff: int = 512,
+        dropout: float = 0.2,
+        max_seq_len: int = 200,
         first_year: int = 1984,
     ) -> None:
         """
