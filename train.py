@@ -1,8 +1,6 @@
-from typing import Tuple, Dict
-import pandas as pd
 import numpy as np
 import torch
-from torch.utils.data import Dataset, DataLoader, random_split
+from torch.utils.data import Dataset, DataLoader
 from model.stpred import SpatioTemporalPredictor
 from torch.optim import Adam
 from torch.nn import MSELoss
@@ -40,7 +38,7 @@ class NDVIDataset(Dataset):
     def __len__(self) -> int:
         return len(self.valid_indices)
 
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, ...]:
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, ...]:
         t, h, w = self.valid_indices[idx]
 
         # Extract patches for the sequence
@@ -75,7 +73,7 @@ def create_train_val_split(
     val_years: tuple[int, int],
     sequence_length: int = SEQUENCE_LENGTH,
     patch_size: int = PATCH_SIZE,
-) -> Tuple[DataLoader, DataLoader]:
+) -> tuple[DataLoader, DataLoader]:
     """Create train/validation splits based on years"""
 
     # Find indices for train/val years
@@ -96,7 +94,7 @@ def create_train_val_split(
     return train_loader, val_loader
 
 
-def setup_model(device: torch.device) -> Tuple[SpatioTemporalPredictor, torch.optim.Optimizer, torch.nn.Module]:
+def setup_model(device: torch.device) -> tuple[SpatioTemporalPredictor, torch.optim.Optimizer, torch.nn.Module]:
     """Initialize model, optimizer and loss function"""
     model = SpatioTemporalPredictor(d_model=256, patch_size=PATCH_SIZE, ndvi_embed_dim=32, year_embed_dim=8, latlon_embed_dim=8, num_heads=8, num_layers=3, dropout=0.1).to(device)
 
