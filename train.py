@@ -1,13 +1,16 @@
-from typing import Tuple
+from typing import Tuple, Dict
 import pandas as pd
 import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader, random_split
 from model.stpred import SpatioTemporalPredictor
+from torch.optim import Adam
+from torch.nn import MSELoss
+from tqdm import tqdm
 
 # Training constants
 PATCH_SIZE = 3  # Size of NDVI patches (must be odd)
-BATCH_SIZE = 1  # Batch size for training
+BATCH_SIZE = 32  # Batch size for training
 SEQUENCE_LENGTH = 5  # Number of timesteps to use for prediction
 
 
@@ -26,31 +29,24 @@ class NDVIDataset(Dataset):
         self.patch_size = patch_size
         self.pad_size = patch_size // 2
 
-        # Add padding to height and width dimensions for patch extraction
-        self.padded_data = torch.nn.functional.pad(self.data, (0, 0, self.pad_size, self.pad_size, self.pad_size, self.pad_size), mode="replicate")
-
         # Calculate valid indices (need sequence_length + 1 consecutive timestamps)
+        # Only include pixels that have enough surrounding pixels for the patch
         self.valid_indices = []
         for t in range(len(data) - sequence_length):
-            for h in range(data.shape[1]):
-                for w in range(data.shape[2]):
+            for h in range(self.pad_size, data.shape[1] - self.pad_size):
+                for w in range(self.pad_size, data.shape[2] - self.pad_size):
                     self.valid_indices.append((t, h, w))
 
     def __len__(self) -> int:
         return len(self.valid_indices)
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, ...]:
-        import ipdb
-
-        ipdb.set_trace()
         t, h, w = self.valid_indices[idx]
-        h_pad = h + self.pad_size
-        w_pad = w + self.pad_size
 
         # Extract patches for the sequence
         patches = []
         for i in range(self.sequence_length):
-            patch = self.padded_data[t + i, h_pad - self.pad_size : h_pad + self.pad_size + 1, w_pad - self.pad_size : w_pad + self.pad_size + 1, 0].flatten()
+            patch = self.data[t + i, h - self.pad_size : h + self.pad_size + 1, w - self.pad_size : w + self.pad_size + 1, 0].flatten()
             patches.append(patch)
 
         sequence_patches = torch.stack(patches)  # (seq_len, patch_size*patch_size)
@@ -93,9 +89,6 @@ def create_train_val_split(
     train_dataset = NDVIDataset(train_data, sequence_length, patch_size)
     val_dataset = NDVIDataset(val_data, sequence_length, patch_size)
 
-    # print simple ndvi value
-    print(train_dataset[0][0])
-
     # Create dataloaders
     train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4, pin_memory=True)
     val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4, pin_memory=True)
@@ -103,21 +96,124 @@ def create_train_val_split(
     return train_loader, val_loader
 
 
+def setup_model(device: torch.device) -> Tuple[SpatioTemporalPredictor, torch.optim.Optimizer, torch.nn.Module]:
+    """Initialize model, optimizer and loss function"""
+    model = SpatioTemporalPredictor(d_model=256, patch_size=PATCH_SIZE, ndvi_embed_dim=32, year_embed_dim=8, latlon_embed_dim=8, num_heads=8, num_layers=3, dropout=0.1).to(device)
+
+    optimizer = Adam(model.parameters(), lr=1e-4)
+    criterion = MSELoss()
+
+    return model, optimizer, criterion
+
+
+def train_epoch(model: torch.nn.Module, train_loader: DataLoader, optimizer: torch.optim.Optimizer, criterion: torch.nn.Module, device: torch.device, epoch: int, num_epochs: int) -> float:
+    """Train for one epoch and return average loss"""
+    model.train()
+    train_loss = 0.0
+    train_batches = 0
+
+    progress_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}")
+    for batch in progress_bar:
+        # Unpack batch and move to device
+        ndvi_patches, month, year, lat, lon, target = [x.to(device) for x in batch]
+
+        # Forward pass
+        predictions, _ = model(ndvi_patches, month, year, lat, lon)
+
+        # predictions should in in shape (batch_size), last dim is unneeded
+        predictions = predictions.squeeze(-1)
+
+        loss = criterion(predictions, target)
+
+        # Backward pass and optimize
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        # Update metrics
+        train_loss += loss.item()
+        train_batches += 1
+        progress_bar.set_postfix({"train_loss": f"{train_loss/train_batches:.6f}"})
+
+    return train_loss / train_batches
+
+
+def validate(model: torch.nn.Module, val_loader: DataLoader, criterion: torch.nn.Module, device: torch.device) -> float:
+    """Run validation and return average loss"""
+    model.eval()
+    val_loss = 0.0
+    val_batches = 0
+
+    with torch.no_grad():
+        for batch in tqdm(val_loader, desc="Validation"):
+            # Unpack batch and move to device
+            ndvi_patches, month, year, lat, lon, target = [x.to(device) for x in batch]
+
+            # Forward pass
+            predictions, _ = model(ndvi_patches, month, year, lat, lon)
+            loss = criterion(predictions.squeeze(), target)
+
+            # Update metrics
+            val_loss += loss.item()
+            val_batches += 1
+
+    return val_loss / val_batches
+
+
+def save_checkpoint(model: torch.nn.Module, optimizer: torch.optim.Optimizer, epoch: int, train_loss: float, val_loss: float, filename: str = "best_model.pt") -> None:
+    """Save model checkpoint"""
+    torch.save(
+        {
+            "epoch": epoch,
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "train_loss": train_loss,
+            "val_loss": val_loss,
+        },
+        filename,
+    )
+    print("Saved new best model!")
+
+
 def train() -> None:
     """Main training function"""
+    # Set device
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+
     # Load data
     data = load_data()
     print(f"Loaded data with shape: {data.shape}")
 
-    # Create train/val split (80% train, 20% val)
-    # Using years 1984-2014 for training, 2015-2024 for validation
+    # Create train/val split
     train_loader, val_loader = create_train_val_split(data, train_years=(1984, 2014), val_years=(2015, 2024), sequence_length=SEQUENCE_LENGTH, patch_size=PATCH_SIZE)
 
-    # Initialize model
-    model = SpatioTemporalPredictor(d_model=256, patch_size=PATCH_SIZE, ndvi_embed_dim=32, year_embed_dim=8, latlon_embed_dim=8, num_heads=8, num_layers=3, dropout=0.1)
+    # Setup model, optimizer and criterion
+    model, optimizer, criterion = setup_model(device)
 
-    # TODO: Add training loop
-    print("Model initialized, ready for training")
+    # Training parameters
+    num_epochs = 100
+    best_val_loss = float("inf")
+
+    # Training loop
+    for epoch in range(num_epochs):
+        # Training phase
+        avg_train_loss = train_epoch(model, train_loader, optimizer, criterion, device, epoch, num_epochs)
+
+        # Validation phase
+        avg_val_loss = validate(model, val_loader, criterion, device)
+
+        # Print epoch summary
+        print(f"\nEpoch {epoch+1}/{num_epochs}")
+        print(f"Train Loss: {avg_train_loss:.6f}")
+        print(f"Val Loss: {avg_val_loss:.6f}")
+
+        # Save best model
+        if avg_val_loss < best_val_loss:
+            best_val_loss = avg_val_loss
+            save_checkpoint(model, optimizer, epoch, avg_train_loss, avg_val_loss)
+
+        print("-" * 50)
 
 
 if __name__ == "__main__":

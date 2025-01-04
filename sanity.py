@@ -4,7 +4,7 @@ from model.stpred import SpatioTemporalPredictor
 
 def test_stpred():
     # Test parameters
-    batch_size = 2
+    batch_size = 20
     seq_len = 10
     patch_size = 3  # 3x3 patch with center pixel
 
