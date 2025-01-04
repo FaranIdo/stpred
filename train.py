@@ -8,9 +8,9 @@ from tqdm import tqdm
 
 # Training constants
 PATCH_SIZE = 3  # Size of NDVI patches (must be odd)
-BATCH_SIZE = 1024  # Batch size for training
+BATCH_SIZE = 2048  # Batch size for training
 SEQUENCE_LENGTH = 10  # Number of timesteps to use for prediction
-
+EPOCHS = 20
 
 class NDVIDataset(Dataset):
     """Dataset for NDVI time series data"""
@@ -190,19 +190,18 @@ def train() -> None:
     model, optimizer, criterion = setup_model(device)
 
     # Training parameters
-    num_epochs = 100
     best_val_loss = float("inf")
 
     # Training loop
-    for epoch in range(num_epochs):
+    for epoch in range(EPOCHS):
         # Training phase
-        avg_train_loss = train_epoch(model, train_loader, optimizer, criterion, device, epoch, num_epochs)
+        avg_train_loss = train_epoch(model, train_loader, optimizer, criterion, device, epoch, EPOCHS)
 
         # Validation phase
         avg_val_loss = validate(model, val_loader, criterion, device)
 
         # Print epoch summary
-        print(f"\nEpoch {epoch+1}/{num_epochs}")
+        print(f"\nEpoch {epoch+1}/{EPOCHS}")
         print(f"Train Loss: {avg_train_loss:.6f}")
         print(f"Val Loss: {avg_val_loss:.6f}")
 
