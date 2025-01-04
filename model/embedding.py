@@ -92,16 +92,17 @@ class LatLonEncoder(nn.Module):
 
 class TimeSeriesEmbedder(nn.Module):
     """
-    Embeds NDVI, cyclical month, (year - first_year), and lat/lon
+    Embeds NDVI patches, cyclical month, (year - first_year), and lat/lon
     into a d_model-dimensional vector. Optionally adds sinusoidal positional encoding.
     """
 
     def __init__(
         self,
         d_model: int,
-        ndvi_embed_dim: int = 8,
+        patch_size: int = 1,  # 1 means 1x1, 3 means 3x3, 5 means 5x5
+        ndvi_embed_dim: int = 32,
         year_embed_dim: int = 8,
-        latlon_embed_dim: int = 8,  # dimension for (lat, lon) embedding
+        latlon_embed_dim: int = 8,
         use_positional_encoding: bool = True,
         max_seq_len: int = 5000,
         first_year: int = 1984,
@@ -109,7 +110,8 @@ class TimeSeriesEmbedder(nn.Module):
         """
         Args:
             d_model: Final dimension for Transformer input.
-            ndvi_embed_dim: Dimension of the embedding we learn for NDVI.
+            patch_size: Size of the NDVI spatial patch (1, 3, or 5).
+            ndvi_embed_dim: Dimension of the embedding we learn for NDVI patch.
             year_embed_dim: Dimension of the embedding we learn for Year.
             latlon_embed_dim: Dimension of the embedding for (lat, lon).
             use_positional_encoding: Whether to add sinusoidal PE.
@@ -118,9 +120,11 @@ class TimeSeriesEmbedder(nn.Module):
         """
         super().__init__()
         self.first_year = first_year
+        self.patch_size = patch_size
+        self.n_pixels = patch_size * patch_size
 
         # NDVI and year embeddings
-        self.ndvi_embed = nn.Linear(1, ndvi_embed_dim)  # NDVI -> embedding
+        self.ndvi_embed = nn.Linear(self.n_pixels, ndvi_embed_dim)  # NDVI patch -> embedding
         self.year_embed = nn.Linear(1, year_embed_dim)  # Year -> embedding
 
         # Month encoder -> 2 features (sin, cos)
@@ -143,35 +147,34 @@ class TimeSeriesEmbedder(nn.Module):
 
     def forward(
         self,
-        ndvi: torch.Tensor,
-        month: torch.Tensor,
-        year: torch.Tensor,
-        lat_deg: torch.Tensor,
-        lon_deg: torch.Tensor,
+        ndvi_patch: torch.Tensor,  # Shape: [batch_size, seq_len, patch_size*patch_size]
+        month: torch.Tensor,  # Shape: [batch_size, seq_len]
+        year: torch.Tensor,  # Shape: [batch_size, seq_len]
+        lat_deg: torch.Tensor,  # Shape: [batch_size, seq_len]
+        lon_deg: torch.Tensor,  # Shape: [batch_size, seq_len]
     ) -> torch.Tensor:
         """
         Args:
-            ndvi: (batch_size, seq_len) NDVI values
-            month: (batch_size, seq_len) months in [1..12] (e.g. 1, 2, 3, ..., 12)
-            year: (batch_size, seq_len) float years (e.g. 2000.0)
-            lat_deg: (batch_size, seq_len) latitude in degrees (e.g. 30.0)
-            lon_deg: (batch_size, seq_len) longitude in degrees (e.g. 30.0)
+            ndvi_patch: Flattened NDVI patches
+            month: months in [1..12] (e.g. 1, 2, 3, ..., 12)
+            year: float years (e.g. 2000.0)
+            lat_deg: latitude in degrees (e.g. 30.0)
+            lon_deg: longitude in degrees (e.g. 30.0)
         Returns:
             embeddings: (batch_size, seq_len, d_model)
         """
-        # --- 1) NDVI Embedding
-        ndvi_3d = ndvi.unsqueeze(-1)  # (batch, seq_len, 1)
-        ndvi_e = self.ndvi_embed(ndvi_3d)  # (batch, seq_len, ndvi_embed_dim)
+        # --- 1) NDVI Patch Embedding
+        ndvi_e = self.ndvi_embed(ndvi_patch)  # [batch, seq_len, ndvi_embed_dim]
 
         # --- 2) Year Embedding (shifted by first_year)
-        year_shifted = (year.float() - self.first_year).unsqueeze(-1)  # (batch, seq_len, 1)
-        year_e = self.year_embed(year_shifted)  # (batch, seq_len, year_embed_dim)
+        year_shifted = (year.float() - self.first_year).unsqueeze(-1)
+        year_e = self.year_embed(year_shifted)  # [batch, seq_len, year_embed_dim]
 
         # --- 3) Month -> cyclical (2D)
-        month_e = self.month_encoder(month)  # (batch, seq_len, 2)
+        month_e = self.month_encoder(month)  # [batch, seq_len, 2]
 
         # --- 4) Lat/Lon -> (x, y, z) -> linear embedding
-        latlon_e = self.latlon_encoder(lat_deg, lon_deg)  # (batch, seq_len, latlon_embed_dim)
+        latlon_e = self.latlon_encoder(lat_deg, lon_deg)  # [batch, seq_len, latlon_embed_dim]
 
         # --- 5) Concatenate all features
         combined = torch.cat([ndvi_e, month_e, year_e, latlon_e], dim=-1)
@@ -189,10 +192,12 @@ class TimeSeriesEmbedder(nn.Module):
 def test_time_series_embedder():
     batch_size, seq_len = 2, 5
     d_model = 16
+    patch_size = 3  # 3x3 patch
 
     # Create the embedder
     embedder = TimeSeriesEmbedder(
         d_model=d_model,
+        patch_size=patch_size,
         ndvi_embed_dim=4,
         year_embed_dim=4,
         latlon_embed_dim=4,
@@ -202,26 +207,16 @@ def test_time_series_embedder():
     )
 
     # Example input data
-    ndvi = torch.rand(batch_size, seq_len) * 0.3  # NDVI in [0..0.3]
+    ndvi_patch = torch.rand(batch_size, seq_len, patch_size * patch_size)  # Flattened patches
     month = torch.randint(1, 13, (batch_size, seq_len))  # months [1..12]
     year = 1984 + torch.randint(0, 35, (batch_size, seq_len))  # random years
     lat = torch.full((batch_size, seq_len), 31.76)  # ~31.76 deg
     lon = torch.full((batch_size, seq_len), 34.77)  # ~34.77 deg
 
     # Get embeddings
-    embeddings = embedder(ndvi, month, year, lat, lon)
+    embeddings = embedder(ndvi_patch, month, year, lat, lon)
     print("Output embeddings shape:", embeddings.shape)
 
 
 if __name__ == "__main__":
     test_time_series_embedder()
-
-    # def _init_weights(self, m):
-    #     if isinstance(m, nn.Linear):
-    #         # we use xavier_uniform following official JAX ViT:
-    #         torch.nn.init.xavier_uniform_(m.weight)
-    #         if isinstance(m, nn.Linear) and m.bias is not None:
-    #             nn.init.constant_(m.bias, 0)
-    #     elif isinstance(m, nn.LayerNorm):
-    #         nn.init.constant_(m.bias, 0)
-    #         nn.init.constant_(m.weight, 1.0)
