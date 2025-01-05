@@ -23,7 +23,7 @@ class SpatioTemporalPredictor(nn.Module):
         num_heads: int = 8,
         num_layers: int = 2,
         d_ff: int = 512,
-        dropout: float = 0.4,
+        dropout: float = 0.2,
         max_seq_len: int = 200,
         first_year: int = 1984,
     ) -> None:

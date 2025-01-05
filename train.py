@@ -8,6 +8,7 @@ from torch.nn import MSELoss, L1Loss
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 import os
+import logging
 from datetime import datetime
 
 # Training constants
@@ -16,7 +17,7 @@ BATCH_SIZE = 2048  # Batch size for training
 SEQUENCE_LENGTH = 10  # Number of timesteps to use for prediction
 EPOCHS = 20
 WARMUP_EPOCHS = 5  # Number of epochs to keep learning rate constant
-DATA_SAMPLE_PERCENTAGE = 0.005  # Percentage of data to use for training and validation
+DATA_SAMPLE_PERCENTAGE = 0.5  # Percentage of data to use for training and validation
 LEARNING_RATE = 1e-3  # Starting learning rate
 DECAY_GAMMA = 0.95  # Decay rate for learning rate scheduler
 
@@ -221,23 +222,48 @@ def save_checkpoint(model: torch.nn.Module, optimizer: torch.optim.Optimizer, ep
     print(f"Saved checkpoint: {filepath}")
 
 
+def setup_logging(run_dir: str) -> None:
+    """Setup logging to both file and console"""
+    # Create formatter
+    formatter = logging.Formatter("%(asctime)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+
+    # Setup file handler
+    log_file = os.path.join(run_dir, "training.log")
+    file_handler = logging.FileHandler(log_file)
+    file_handler.setFormatter(formatter)
+
+    # Setup console handler
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+
+    # Setup logger
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
+
+
 def train() -> None:
     """Main training function"""
     # Set device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
 
     # Create run directory with timestamp under checkpoints
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir = os.path.join("checkpoints", timestamp)
     os.makedirs(run_dir, exist_ok=True)
 
+    # Setup logging
+    setup_logging(run_dir)
+
+    logging.info(f"Using device: {device}")
+
     # Initialize TensorBoard writer in the run directory
     writer = SummaryWriter(log_dir=run_dir)
 
     # Load data
     data = load_data()
-    print(f"Loaded data with shape: {data.shape}")
+    logging.info(f"Loaded data with shape: {data.shape}")
 
     # Create train/val split
     train_loader, val_loader = create_train_val_split(data, train_years=(1984, 2014), val_years=(2015, 2024), sequence_length=SEQUENCE_LENGTH, patch_size=PATCH_SIZE)
@@ -260,20 +286,20 @@ def train() -> None:
         if epoch >= WARMUP_EPOCHS:
             scheduler.step()
 
-        # Print epoch summary
-        print(f"\nEpoch {epoch+1}/{EPOCHS}")
-        print(f"Train Loss: {avg_train_loss:.6f}, Train MAE: {avg_train_mae:.6f}")
-        print(f"Val Loss: {avg_val_loss:.6f}, Val MAE: {avg_val_mae:.6f}")
-        print(f"Learning Rate: {scheduler.get_last_lr()[0]:.6f}")
+        # Log epoch summary
+        logging.info(f"\nEpoch {epoch+1}/{EPOCHS}")
+        logging.info(f"Train Loss: {avg_train_loss:.6f}, Train MAE: {avg_train_mae:.6f}")
+        logging.info(f"Val Loss: {avg_val_loss:.6f}, Val MAE: {avg_val_mae:.6f}")
+        logging.info(f"Learning Rate: {scheduler.get_last_lr()[0]:.6f}")
         if epoch < WARMUP_EPOCHS:
-            print("(Warm-up period - Learning rate constant)")
+            logging.info("(Warm-up period - Learning rate constant)")
 
         # Save best model
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
             save_checkpoint(model, optimizer, epoch, avg_train_loss, avg_val_loss, run_dir)
 
-        print("-" * 50)
+        logging.info("-" * 50)
 
     # Close TensorBoard writer
     writer.close()
