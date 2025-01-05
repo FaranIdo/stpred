@@ -4,7 +4,8 @@ from torch.utils.data import Dataset, DataLoader
 from model.stpred import SpatioTemporalPredictor
 from torch.optim import Adam
 from torch.optim.lr_scheduler import ExponentialLR
-from torch.nn import MSELoss
+from torch.nn import MSELoss, L1Loss
+from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 import os
 from datetime import datetime
@@ -15,7 +16,7 @@ BATCH_SIZE = 2048  # Batch size for training
 SEQUENCE_LENGTH = 10  # Number of timesteps to use for prediction
 EPOCHS = 20
 WARMUP_EPOCHS = 5  # Number of epochs to keep learning rate constant
-DATA_SAMPLE_PERCENTAGE = 0.5  # Percentage of data to use for training and validation
+DATA_SAMPLE_PERCENTAGE = 0.005  # Percentage of data to use for training and validation
 LEARNING_RATE = 1e-3  # Starting learning rate
 DECAY_GAMMA = 0.95  # Decay rate for learning rate scheduler
 
@@ -117,11 +118,15 @@ def setup_model(device: torch.device) -> tuple[SpatioTemporalPredictor, torch.op
     return model, optimizer, scheduler, criterion
 
 
-def train_epoch(model: torch.nn.Module, train_loader: DataLoader, optimizer: torch.optim.Optimizer, criterion: torch.nn.Module, device: torch.device, epoch: int, num_epochs: int) -> float:
-    """Train for one epoch and return average loss"""
+def train_epoch(
+    model: torch.nn.Module, train_loader: DataLoader, optimizer: torch.optim.Optimizer, criterion: torch.nn.Module, device: torch.device, epoch: int, num_epochs: int, writer: SummaryWriter
+) -> tuple[float, float]:
+    """Train for one epoch and return average loss and MAE"""
     model.train()
     train_loss = 0.0
+    train_mae = 0.0
     train_batches = 0
+    mae_criterion = L1Loss()
 
     progress_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}")
     for batch in progress_bar:
@@ -135,6 +140,7 @@ def train_epoch(model: torch.nn.Module, train_loader: DataLoader, optimizer: tor
         predictions = predictions.squeeze(-1)
 
         loss = criterion(predictions, target)
+        mae = mae_criterion(predictions, target)
 
         # Backward pass and optimize
         optimizer.zero_grad()
@@ -143,17 +149,27 @@ def train_epoch(model: torch.nn.Module, train_loader: DataLoader, optimizer: tor
 
         # Update metrics
         train_loss += loss.item()
+        train_mae += mae.item()
         train_batches += 1
-        progress_bar.set_postfix({"train_loss": f"{train_loss/train_batches:.6f}"})
+        progress_bar.set_postfix({"train_loss": f"{train_loss/train_batches:.6f}", "train_mae": f"{train_mae/train_batches:.6f}"})
 
-    return train_loss / train_batches
+    avg_train_loss = train_loss / train_batches
+    avg_train_mae = train_mae / train_batches
+
+    # Log to TensorBoard
+    writer.add_scalar("Loss/train", avg_train_loss, epoch)
+    writer.add_scalar("MAE/train", avg_train_mae, epoch)
+
+    return avg_train_loss, avg_train_mae
 
 
-def validate(model: torch.nn.Module, val_loader: DataLoader, criterion: torch.nn.Module, device: torch.device) -> float:
-    """Run validation and return average loss"""
+def validate(model: torch.nn.Module, val_loader: DataLoader, criterion: torch.nn.Module, device: torch.device, epoch: int, writer: SummaryWriter) -> tuple[float, float]:
+    """Run validation and return average loss and MAE"""
     model.eval()
     val_loss = 0.0
+    val_mae = 0.0
     val_batches = 0
+    mae_criterion = L1Loss()
 
     with torch.no_grad():
         for batch in tqdm(val_loader, desc="Validation"):
@@ -162,23 +178,35 @@ def validate(model: torch.nn.Module, val_loader: DataLoader, criterion: torch.nn
 
             # Forward pass
             predictions, _ = model(ndvi_patches, month, year, lat, lon)
-            loss = criterion(predictions.squeeze(), target)
+            predictions = predictions.squeeze(-1)
+
+            loss = criterion(predictions, target)
+            mae = mae_criterion(predictions, target)
 
             # Update metrics
             val_loss += loss.item()
+            val_mae += mae.item()
             val_batches += 1
 
-    return val_loss / val_batches
+    avg_val_loss = val_loss / val_batches
+    avg_val_mae = val_mae / val_batches
+
+    # Log to TensorBoard
+    writer.add_scalar("Loss/val", avg_val_loss, epoch)
+    writer.add_scalar("MAE/val", avg_val_mae, epoch)
+
+    return avg_val_loss, avg_val_mae
 
 
-def save_checkpoint(model: torch.nn.Module, optimizer: torch.optim.Optimizer, epoch: int, train_loss: float, val_loss: float) -> None:
-    """Save model checkpoint with timestamp in checkpoints directory"""
-    # Create checkpoints directory if it doesn't exist
-    os.makedirs("checkpoints", exist_ok=True)
+def save_checkpoint(model: torch.nn.Module, optimizer: torch.optim.Optimizer, epoch: int, train_loss: float, val_loss: float, run_dir: str) -> None:
+    """Save model checkpoint in the run directory"""
+    # Create models directory if it doesn't exist
+    models_dir = os.path.join(run_dir, "models")
+    os.makedirs(models_dir, exist_ok=True)
 
-    # Generate filename with timestamp
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"checkpoints/model_epoch{epoch:03d}_{timestamp}_valloss{val_loss:.6f}.pt"
+    # Generate filename with just epoch and validation loss
+    filename = f"model_epoch{epoch:03d}_valloss{val_loss:.6f}.pt"
+    filepath = os.path.join(models_dir, filename)
 
     torch.save(
         {
@@ -187,11 +215,10 @@ def save_checkpoint(model: torch.nn.Module, optimizer: torch.optim.Optimizer, ep
             "optimizer_state_dict": optimizer.state_dict(),
             "train_loss": train_loss,
             "val_loss": val_loss,
-            "timestamp": datetime.now().isoformat(),
         },
-        filename,
+        filepath,
     )
-    print(f"Saved checkpoint: {filename}")
+    print(f"Saved checkpoint: {filepath}")
 
 
 def train() -> None:
@@ -199,6 +226,14 @@ def train() -> None:
     # Set device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
+
+    # Create run directory with timestamp under checkpoints
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_dir = os.path.join("checkpoints", timestamp)
+    os.makedirs(run_dir, exist_ok=True)
+
+    # Initialize TensorBoard writer in the run directory
+    writer = SummaryWriter(log_dir=run_dir)
 
     # Load data
     data = load_data()
@@ -216,10 +251,10 @@ def train() -> None:
     # Training loop
     for epoch in range(EPOCHS):
         # Training phase
-        avg_train_loss = train_epoch(model, train_loader, optimizer, criterion, device, epoch, EPOCHS)
+        avg_train_loss, avg_train_mae = train_epoch(model, train_loader, optimizer, criterion, device, epoch, EPOCHS, writer)
 
         # Validation phase
-        avg_val_loss = validate(model, val_loader, criterion, device)
+        avg_val_loss, avg_val_mae = validate(model, val_loader, criterion, device, epoch, writer)
 
         # Step the scheduler after warm-up period
         if epoch >= WARMUP_EPOCHS:
@@ -227,8 +262,8 @@ def train() -> None:
 
         # Print epoch summary
         print(f"\nEpoch {epoch+1}/{EPOCHS}")
-        print(f"Train Loss: {avg_train_loss:.6f}")
-        print(f"Val Loss: {avg_val_loss:.6f}")
+        print(f"Train Loss: {avg_train_loss:.6f}, Train MAE: {avg_train_mae:.6f}")
+        print(f"Val Loss: {avg_val_loss:.6f}, Val MAE: {avg_val_mae:.6f}")
         print(f"Learning Rate: {scheduler.get_last_lr()[0]:.6f}")
         if epoch < WARMUP_EPOCHS:
             print("(Warm-up period - Learning rate constant)")
@@ -236,9 +271,12 @@ def train() -> None:
         # Save best model
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
-            save_checkpoint(model, optimizer, epoch, avg_train_loss, avg_val_loss)
+            save_checkpoint(model, optimizer, epoch, avg_train_loss, avg_val_loss, run_dir)
 
         print("-" * 50)
+
+    # Close TensorBoard writer
+    writer.close()
 
 
 if __name__ == "__main__":
