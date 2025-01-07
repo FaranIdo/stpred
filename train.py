@@ -22,7 +22,7 @@ WARMUP_EPOCHS = 5  # Number of epochs to keep learning rate constant
 DATA_SAMPLE_PERCENTAGE = 0.1  # Percentage of data to use for training and validation
 LEARNING_RATE = 2e-3  # Increased learning rate to compensate for larger batch size
 DECAY_GAMMA = 0.95  # Decay rate for learning rate scheduler
-WORKERS = 16  # Reduced number of workers to prevent CPU bottleneck
+WORKERS = 8  # Reduced number of workers to prevent CPU bottleneck
 PREFETCH_FACTOR = 2  # Reduced prefetch factor to prevent memory issues
 LOG_INTERVAL = 10  # Reduced logging interval for better progress tracking
 GRADIENT_ACCUMULATION_STEPS = 1  # Steps to accumulate gradients before updating parameters
@@ -30,21 +30,21 @@ GRADIENT_ACCUMULATION_STEPS = 1  # Steps to accumulate gradients before updating
 class NDVIDataset(Dataset):
     """Dataset for NDVI time series data with on-demand patch computation and random patch size masking"""
 
-    def __init__(self, data: np.ndarray, sequence_length: int = SEQUENCE_LENGTH, patch_size: int = PATCH_SIZE) -> None:
+    def __init__(self, data: np.ndarray, sequence_length: int = SEQUENCE_LENGTH, patch_size: int = PATCH_SIZE, sequence_masking: bool = False) -> None:
         """
         Args:
             data: Array of shape (timesteps, height, width, features)
-            sequence_length: Number of timesteps to use for prediction
+            sequence_length: Maximum number of timesteps to use for prediction
             patch_size: Maximum size of NDVI patches (must be odd)
         """
         logging.info(f"Initializing NDVIDataset with data shape: {data.shape}")
 
         # Store data as numpy array
         self.data = data
-        self.sequence_length = sequence_length
+        self.max_sequence_length = sequence_length  # Renamed to indicate it's the maximum
         self.patch_size = patch_size
         self.pad_size = patch_size // 2
-
+        self.sequence_masking = sequence_masking
         # Pre-compute possible patch sizes (odd numbers from 3 to patch_size)
         self.possible_patch_sizes = np.arange(3, patch_size + 1, 2)
 
@@ -63,7 +63,7 @@ class NDVIDataset(Dataset):
         # Calculate valid indices directly
         logging.info("Calculating valid indices...")
         # Vectorized valid indices calculation
-        t_range = np.arange(len(data) - sequence_length)
+        t_range = np.arange(len(data) - self.max_sequence_length)
         h_range = np.arange(self.pad_size, data.shape[1] - self.pad_size)
         w_range = np.arange(self.pad_size, data.shape[2] - self.pad_size)
 
@@ -98,22 +98,30 @@ class NDVIDataset(Dataset):
         padded = np.pad(patch, pad_amount, mode="constant", constant_values=0)
         return padded.ravel()
 
+    def _get_random_sequence_length(self) -> int:
+        """Generate random sequence length between 1 and max_sequence_length"""
+        if self.sequence_masking:
+            return np.random.randint(1, self.max_sequence_length + 1)
+        else:
+            return self.max_sequence_length
+
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
-        """Compute patches and metadata on-demand with random patch size masking"""
+        """Compute patches and metadata on-demand with random patch size and sequence length masking"""
         t, h, w = self.valid_indices[idx]
 
-        # Get random patch size for this sample
+        # Get random sequence length and patch size for this sample
+        sequence_length = self._get_random_sequence_length()
         random_patch_size = self._get_random_patch_size()
 
-        # Pre-allocate array for sequence
-        padded_patches = np.empty((self.sequence_length, self.patch_size * self.patch_size), dtype=np.float32)
+        # Pre-allocate array for sequence with actual sequence length
+        padded_patches = np.empty((sequence_length, self.patch_size * self.patch_size), dtype=np.float32)
 
         # Extract and pad patches for the sequence
-        for i in range(self.sequence_length):
+        for i in range(sequence_length):
             padded_patches[i] = self._extract_and_pad_patch(t + i, h, w, random_patch_size)
 
-        # Extract metadata for the sequence (single slice operation)
-        sequence = self.data[t : t + self.sequence_length, h, w]  # (seq_len, features)
+        # Extract metadata for the sequence
+        sequence = self.data[t : t + sequence_length, h, w]  # (seq_len, features)
 
         # Create all tensors at once
         return {
@@ -122,8 +130,9 @@ class NDVIDataset(Dataset):
             "year": torch.from_numpy(sequence[..., 2].astype(np.float32)),
             "lat": torch.from_numpy(sequence[..., 3].astype(np.float32)),
             "lon": torch.from_numpy(sequence[..., 4].astype(np.float32)),
-            "target": torch.tensor(self.data[t + self.sequence_length, h, w, 0], dtype=torch.float32),
+            "target": torch.tensor(self.data[t + sequence_length, h, w, 0], dtype=torch.float32),
             "patch_size": torch.tensor(random_patch_size, dtype=torch.int32),
+            "sequence_length": torch.tensor(sequence_length, dtype=torch.int32),
         }
 
 

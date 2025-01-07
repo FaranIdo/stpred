@@ -50,13 +50,13 @@ def test_ndvidataset_getitem():
     # Initialize dataset with default parameters
     sequence_length = 10
     patch_size = 21
-    dataset = NDVIDataset(data, sequence_length=sequence_length, patch_size=patch_size)
+    dataset = NDVIDataset(data, sequence_length=sequence_length, patch_size=patch_size, sequence_masking=False)
 
     # Get a sample
     sample = dataset[0]
 
     # Test that all expected keys are present
-    expected_keys = {"ndvi", "month", "year", "lat", "lon", "target", "patch_size"}
+    expected_keys = {"ndvi", "month", "year", "lat", "lon", "target", "patch_size", "sequence_length"}
     assert set(sample.keys()) == expected_keys
 
     # Test shapes
@@ -92,8 +92,43 @@ def test_ndvidataset_getitem():
     print("\n✅ NDVIDataset test passed successfully!")
 
 
+def test_ndvidataset_sequence_lengths():
+    # Create sample data
+    timesteps = 90
+    height = 50
+    width = 40
+    features = 5  # [ndvi, month, year, lat, lon]
+    data = np.random.rand(timesteps, height, width, features)
+
+    # Initialize dataset with a large sequence length
+    max_sequence_length = 80
+    patch_size = 21
+    dataset = NDVIDataset(data, sequence_length=max_sequence_length, patch_size=patch_size, sequence_masking=True)
+
+    # Get multiple samples and check their sequence lengths
+    num_samples = 50
+    sequence_lengths = []
+    for _ in range(num_samples):
+        sample = dataset[0]  # Always get first item, but sequence length should vary
+        curr_seq_len = sample["sequence_length"].item()
+        sequence_lengths.append(curr_seq_len)
+
+        # Basic assertions for each sample
+        assert curr_seq_len >= 1, f"Sequence length should be greater than 1, got {curr_seq_len}"
+        assert curr_seq_len <= max_sequence_length, f"Sequence length {curr_seq_len} exceeds maximum {max_sequence_length}"
+        assert sample["ndvi"].shape[0] == curr_seq_len, "NDVI sequence length doesn't match sequence_length"
+
+    # Verify we got at least some variation in sequence lengths
+    unique_lengths = set(sequence_lengths)
+    assert len(unique_lengths) > 1, "Should get varying sequence lengths across multiple gets"
+
+    print(f"\nObserved sequence lengths: {sorted(unique_lengths)}")
+    print("✅ NDVIDataset sequence length variation test passed successfully!")
+
+
 if __name__ == "__main__":
     print("\nRunning sanity tests...")
     test_stpred()
     test_ndvidataset_getitem()
+    test_ndvidataset_sequence_lengths()
     print("\n🎉 All sanity tests passed successfully!")
