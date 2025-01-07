@@ -151,7 +151,7 @@ def train_epoch(
     optimizer.zero_grad(set_to_none=True)
 
     # Enable automatic mixed precision for faster training
-    scaler = torch.cuda.amp.GradScaler()
+    scaler = torch.amp.GradScaler()
 
     # Enable automatic memory management
     torch.cuda.empty_cache()
@@ -164,7 +164,7 @@ def train_epoch(
             batch = {k: v.to("cuda") for k, v in batch.items()}
 
             # Forward pass with automatic mixed precision
-            with torch.cuda.amp.autocast():
+            with torch.amp.autocast(device_type="cuda", dtype=torch.float16):
                 predictions, _ = model(batch["ndvi"], batch["month"], batch["year"], batch["lat"], batch["lon"])
                 predictions = predictions.squeeze(-1)
                 loss = criterion(predictions, batch["target"]) / GRADIENT_ACCUMULATION_STEPS
