@@ -10,24 +10,25 @@ import os
 import logging
 from datetime import datetime
 import gc
-import time  # Add time import
+import time
+from tqdm import tqdm  # Add tqdm import
 
 # Training constants
 PATCH_SIZE = 3  # Size of NDVI patches (must be odd)
-BATCH_SIZE = 2048  # Increased batch size for better GPU utilization
+BATCH_SIZE = 4096  # Increased batch size for better GPU utilization
 SEQUENCE_LENGTH = 10  # Number of timesteps to use for prediction
 EPOCHS = 30
 WARMUP_EPOCHS = 5  # Number of epochs to keep learning rate constant
-DATA_SAMPLE_PERCENTAGE = 0.25  # Percentage of data to use for training and validation
-LEARNING_RATE = 1e-3  # Starting learning rate
+DATA_SAMPLE_PERCENTAGE = 0.1  # Percentage of data to use for training and validation
+LEARNING_RATE = 2e-3  # Increased learning rate to compensate for larger batch size
 DECAY_GAMMA = 0.95  # Decay rate for learning rate scheduler
-WORKERS = 12  # Increased number of workers for better CPU utilization
-PREFETCH_FACTOR = 4  # Increased prefetch factor for better data loading
-LOG_INTERVAL = 50  # How often to log progress (in batches)
-GRADIENT_ACCUMULATION_STEPS = 4  # Number of steps to accumulate gradients
+WORKERS = 8  # Reduced number of workers to prevent CPU bottleneck
+PREFETCH_FACTOR = 2  # Reduced prefetch factor to prevent memory issues
+LOG_INTERVAL = 10  # Reduced logging interval for better progress tracking
+GRADIENT_ACCUMULATION_STEPS = 1  # Removed gradient accumulation for direct updates
 
 class NDVIDataset(Dataset):
-    """Dataset for NDVI time series data"""
+    """Dataset for NDVI time series data with on-demand patch computation"""
 
     def __init__(self, data: np.ndarray, sequence_length: int = SEQUENCE_LENGTH, patch_size: int = PATCH_SIZE) -> None:
         """
@@ -36,55 +37,57 @@ class NDVIDataset(Dataset):
             sequence_length: Number of timesteps to use for prediction
             patch_size: Size of NDVI patches (must be odd)
         """
-        self.data = torch.from_numpy(data).float()
+        logging.info(f"Initializing NDVIDataset with data shape: {data.shape}")
+
+        # Store data as numpy array
+        self.data = data
         self.sequence_length = sequence_length
         self.patch_size = patch_size
         self.pad_size = patch_size // 2
 
-        # Calculate valid indices (need sequence_length + 1 consecutive timestamps)
-        # Only include pixels that have enough surrounding pixels for the patch
-        self.valid_indices = []
+        # Calculate valid indices directly
+        logging.info("Calculating valid indices...")
+        valid_indices = []
         for t in range(len(data) - sequence_length):
             for h in range(self.pad_size, data.shape[1] - self.pad_size):
                 for w in range(self.pad_size, data.shape[2] - self.pad_size):
-                    self.valid_indices.append((t, h, w))
+                    valid_indices.append((t, h, w))
 
-        # Sample only a percentage of the data
+        # Convert to numpy array and sample
+        self.valid_indices = np.array(valid_indices)
         num_samples = int(len(self.valid_indices) * DATA_SAMPLE_PERCENTAGE)
         indices = np.random.choice(len(self.valid_indices), size=num_samples, replace=False)
-        self.valid_indices = [self.valid_indices[i] for i in indices]
+        self.valid_indices = self.valid_indices[indices]
+
+        logging.info(f"Dataset initialized with {len(self)} samples")
 
     def __len__(self) -> int:
         return len(self.valid_indices)
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
+        """Compute patches and metadata on-demand"""
         t, h, w = self.valid_indices[idx]
 
-        #         -        # Extract patches for the sequence
-        # -        patches = []
-        # -        for i in range(self.sequence_length):
-        # -            patch = self.data[t + i, h - self.pad_size : h + self.pad_size + 1, w - self.pad_size : w + self.pad_size + 1, 0].flatten()
-        # -            patches.append(patch)
-        # -
-        # -        sequence_patches = torch.stack(patches)  # (seq_len, patch_size*patch_size)
-        # -
-        # -        # Get other features for the center pixel
+        # Extract sequence patches
+        sequence_patches = np.empty((self.sequence_length, self.patch_size * self.patch_size), dtype=np.float32)
+        for i in range(self.sequence_length):
+            sequence_patches[i] = self.data[t + i, h - self.pad_size : h + self.pad_size + 1, w - self.pad_size : w + self.pad_size + 1, 0].flatten()
 
-        # Get sequence data efficiently
+        # Convert to tensor efficiently
+        patches = torch.from_numpy(sequence_patches)
+
+        # Extract metadata for the sequence
         sequence = self.data[t : t + self.sequence_length, h, w]  # (seq_len, features)
         target = self.data[t + self.sequence_length, h, w, 0]  # Next NDVI value
 
-        ndvi = sequence[..., 0]
-        ndvi = ndvi.unsqueeze(1)  # Add an extra dimension to make it [10, 1]
-        pad_size = 8
-        ndvi = torch.nn.functional.pad(ndvi, (0, pad_size))
-
-        month = sequence[..., 1]
-        year = sequence[..., 2]
-        lat = sequence[..., 3]
-        lon = sequence[..., 4]
-
-        return {"ndvi": ndvi, "month": month, "year": year, "lat": lat, "lon": lon, "target": target}
+        return {
+            "ndvi": patches,
+            "month": torch.tensor(sequence[..., 1], dtype=torch.float32),
+            "year": torch.tensor(sequence[..., 2], dtype=torch.float32),
+            "lat": torch.tensor(sequence[..., 3], dtype=torch.float32),
+            "lon": torch.tensor(sequence[..., 4], dtype=torch.float32),
+            "target": torch.tensor(target, dtype=torch.float32),
+        }
 
 
 def load_data() -> np.ndarray:
@@ -141,11 +144,14 @@ def train_epoch(
     train_batches = 0
     mae_criterion = L1Loss()
     total_batches = len(train_loader)
-    start_time = time.time()  # Start timing
-    batch_start_time = time.time()  # Track individual batch timing
+    start_time = time.time()
+    batch_start_time = time.time()
 
     logging.info(f"Starting epoch {epoch+1}/{num_epochs}")
-    optimizer.zero_grad(set_to_none=True)  # More efficient gradient clearing
+    optimizer.zero_grad(set_to_none=True)
+
+    # Enable automatic mixed precision for faster training
+    scaler = torch.cuda.amp.GradScaler()
 
     # Enable automatic memory management
     torch.cuda.empty_cache()
@@ -154,28 +160,28 @@ def train_epoch(
 
     for i, batch in enumerate(train_loader):
         try:
-            # Move batch to device efficiently using non_blocking transfer
-            batch = {k: v.to(device, non_blocking=True) for k, v in batch.items()}
+            # move batch to device efficiently in advance
+            batch = {k: v.to("cuda") for k, v in batch.items()}
 
-            # Forward pass
-            predictions, _ = model(batch["ndvi"], batch["month"], batch["year"], batch["lat"], batch["lon"])
-            predictions = predictions.squeeze(-1)
+            # Forward pass with automatic mixed precision
+            with torch.cuda.amp.autocast():
+                predictions, _ = model(batch["ndvi"], batch["month"], batch["year"], batch["lat"], batch["lon"])
+                predictions = predictions.squeeze(-1)
+                loss = criterion(predictions, batch["target"]) / GRADIENT_ACCUMULATION_STEPS
+                mae = mae_criterion(predictions, batch["target"])
 
-            # Scale loss by accumulation steps for consistent total loss
-            loss = criterion(predictions, batch["target"]) / GRADIENT_ACCUMULATION_STEPS
-            mae = mae_criterion(predictions, batch["target"])
+            # Backward pass with gradient scaling
+            scaler.scale(loss).backward()
 
-            # Backward pass
-            loss.backward()
-
-            # Update metrics (use float to detach from computation graph)
-            train_loss += float(loss.item() * GRADIENT_ACCUMULATION_STEPS)  # Scale back for logging
+            # Update metrics
+            train_loss += float(loss.item() * GRADIENT_ACCUMULATION_STEPS)
             train_mae += float(mae.item())
             train_batches += 1
 
             # Only optimize after accumulation steps
             if (i + 1) % GRADIENT_ACCUMULATION_STEPS == 0 or (i + 1) == len(train_loader):
-                optimizer.step()
+                scaler.step(optimizer)
+                scaler.update()
                 optimizer.zero_grad(set_to_none=True)
 
             # Log progress periodically
@@ -192,20 +198,19 @@ def train_epoch(
                     f"Loss: {current_loss:.6f}, MAE: {current_mae:.6f} - "
                     f"Speed: {samples_per_second:.1f} samples/sec"
                 )
-                batch_start_time = current_time  # Reset batch timer
+                batch_start_time = current_time
 
         finally:
-            # Explicit cleanup with memory optimization
+            # Explicit cleanup
             del loss, mae, predictions
             for k in list(batch.keys()):
                 del batch[k]
             del batch
 
-            # Optimized garbage collection
-            if (i + 1) % (GRADIENT_ACCUMULATION_STEPS * 2) == 0:  # Reduced frequency of GC
+            if (i + 1) % (GRADIENT_ACCUMULATION_STEPS * 2) == 0:
                 if device.type == "cuda":
-                    torch.cuda.empty_cache()  # Clear unused memory
-                gc.collect()  # Run garbage collection
+                    torch.cuda.empty_cache()
+                gc.collect()
 
     avg_train_loss = train_loss / train_batches
     avg_train_mae = train_mae / train_batches
