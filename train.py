@@ -83,7 +83,6 @@ class NDVIDataset(Dataset):
         """Update the current sequence length if sequence masking is enabled"""
         if self.sequence_masking:
             self.current_sequence_length = np.random.randint(1, self.max_sequence_length + 1)
-            print(f"Set sequence length to {self.current_sequence_length}")
 
     def __len__(self) -> int:
         return len(self.valid_indices)
