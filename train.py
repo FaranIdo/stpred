@@ -302,7 +302,7 @@ def validate(model: torch.nn.Module, val_loader: DataLoader, criterion: torch.nn
     mae_criterion = L1Loss()
     total_batches = len(val_loader)
 
-    logging.info("Starting validation...")
+    logging.info(f"Starting validation with total batches: {total_batches}")
     with torch.no_grad():
         for i, batch in enumerate(val_loader):
             # Move batch to device
