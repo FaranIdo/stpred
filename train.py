@@ -14,28 +14,28 @@ import time
 from tqdm import tqdm  # Add tqdm import
 
 # Training constants
-PATCH_SIZE = 3  # Size of NDVI patches (must be odd)
-BATCH_SIZE = 4096  # Increased batch size for better GPU utilization
+PATCH_SIZE = 9  # Size of NDVI patches (must be odd)
+BATCH_SIZE = 8192  # Increased batch size for better GPU utilization
 SEQUENCE_LENGTH = 10  # Number of timesteps to use for prediction
-EPOCHS = 30
+EPOCHS = 30  # Number of epochs to train
 WARMUP_EPOCHS = 5  # Number of epochs to keep learning rate constant
 DATA_SAMPLE_PERCENTAGE = 0.1  # Percentage of data to use for training and validation
 LEARNING_RATE = 2e-3  # Increased learning rate to compensate for larger batch size
 DECAY_GAMMA = 0.95  # Decay rate for learning rate scheduler
-WORKERS = 8  # Reduced number of workers to prevent CPU bottleneck
+WORKERS = 16  # Reduced number of workers to prevent CPU bottleneck
 PREFETCH_FACTOR = 2  # Reduced prefetch factor to prevent memory issues
 LOG_INTERVAL = 10  # Reduced logging interval for better progress tracking
-GRADIENT_ACCUMULATION_STEPS = 1  # Removed gradient accumulation for direct updates
+GRADIENT_ACCUMULATION_STEPS = 1  # Steps to accumulate gradients before updating parameters
 
 class NDVIDataset(Dataset):
-    """Dataset for NDVI time series data with on-demand patch computation"""
+    """Dataset for NDVI time series data with on-demand patch computation and random patch size masking"""
 
     def __init__(self, data: np.ndarray, sequence_length: int = SEQUENCE_LENGTH, patch_size: int = PATCH_SIZE) -> None:
         """
         Args:
             data: Array of shape (timesteps, height, width, features)
             sequence_length: Number of timesteps to use for prediction
-            patch_size: Size of NDVI patches (must be odd)
+            patch_size: Maximum size of NDVI patches (must be odd)
         """
         logging.info(f"Initializing NDVIDataset with data shape: {data.shape}")
 
@@ -45,48 +45,85 @@ class NDVIDataset(Dataset):
         self.patch_size = patch_size
         self.pad_size = patch_size // 2
 
+        # Pre-compute possible patch sizes (odd numbers from 3 to patch_size)
+        self.possible_patch_sizes = np.arange(3, patch_size + 1, 2)
+
+        # Pre-compute padding configurations for each possible patch size
+        self.padding_configs = {}
+        for size in self.possible_patch_sizes:
+            pad_amount = (patch_size - size) // 2
+            # Store pre-computed indices for efficient padding
+            idx = np.zeros(patch_size * patch_size, dtype=np.int32)
+            src_idx = np.arange(size * size)
+            start_idx = pad_amount * patch_size + pad_amount
+            for i in range(size):
+                idx[start_idx + i * patch_size : start_idx + i * patch_size + size] = src_idx[i * size : (i + 1) * size]
+            self.padding_configs[size] = idx
+
         # Calculate valid indices directly
         logging.info("Calculating valid indices...")
-        valid_indices = []
-        for t in range(len(data) - sequence_length):
-            for h in range(self.pad_size, data.shape[1] - self.pad_size):
-                for w in range(self.pad_size, data.shape[2] - self.pad_size):
-                    valid_indices.append((t, h, w))
+        # Vectorized valid indices calculation
+        t_range = np.arange(len(data) - sequence_length)
+        h_range = np.arange(self.pad_size, data.shape[1] - self.pad_size)
+        w_range = np.arange(self.pad_size, data.shape[2] - self.pad_size)
 
-        # Convert to numpy array and sample
-        self.valid_indices = np.array(valid_indices)
-        num_samples = int(len(self.valid_indices) * DATA_SAMPLE_PERCENTAGE)
-        indices = np.random.choice(len(self.valid_indices), size=num_samples, replace=False)
-        self.valid_indices = self.valid_indices[indices]
+        t, h, w = np.meshgrid(t_range, h_range, w_range, indexing="ij")
+        valid_indices = np.stack([t.ravel(), h.ravel(), w.ravel()], axis=1)
+
+        # Sample indices
+        num_samples = int(len(valid_indices) * DATA_SAMPLE_PERCENTAGE)
+        indices = np.random.choice(len(valid_indices), size=num_samples, replace=False)
+        self.valid_indices = valid_indices[indices]
 
         logging.info(f"Dataset initialized with {len(self)} samples")
 
     def __len__(self) -> int:
         return len(self.valid_indices)
 
+    def _get_random_patch_size(self) -> int:
+        """Generate random odd patch size less than or equal to PATCH_SIZE"""
+        return np.random.choice(self.possible_patch_sizes)
+
+    def _extract_and_pad_patch(self, t: int, h: int, w: int, random_patch_size: int) -> np.ndarray:
+        """Efficiently extract and pad patch to patch_size*patch_size"""
+        random_pad_size = random_patch_size // 2
+
+        # Extract patch
+        patch = self.data[t, h - random_pad_size : h + random_pad_size + 1, w - random_pad_size : w + random_pad_size + 1, 0]
+
+        # Calculate padding needed on each side
+        pad_amount = (self.patch_size - random_patch_size) // 2
+
+        # Pad the patch to match patch_size
+        padded = np.pad(patch, pad_amount, mode="constant", constant_values=0)
+        return padded.ravel()
+
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
-        """Compute patches and metadata on-demand"""
+        """Compute patches and metadata on-demand with random patch size masking"""
         t, h, w = self.valid_indices[idx]
 
-        # Extract sequence patches
-        sequence_patches = np.empty((self.sequence_length, self.patch_size * self.patch_size), dtype=np.float32)
+        # Get random patch size for this sample
+        random_patch_size = self._get_random_patch_size()
+
+        # Pre-allocate array for sequence
+        padded_patches = np.empty((self.sequence_length, self.patch_size * self.patch_size), dtype=np.float32)
+
+        # Extract and pad patches for the sequence
         for i in range(self.sequence_length):
-            sequence_patches[i] = self.data[t + i, h - self.pad_size : h + self.pad_size + 1, w - self.pad_size : w + self.pad_size + 1, 0].flatten()
+            padded_patches[i] = self._extract_and_pad_patch(t + i, h, w, random_patch_size)
 
-        # Convert to tensor efficiently
-        patches = torch.from_numpy(sequence_patches)
-
-        # Extract metadata for the sequence
+        # Extract metadata for the sequence (single slice operation)
         sequence = self.data[t : t + self.sequence_length, h, w]  # (seq_len, features)
-        target = self.data[t + self.sequence_length, h, w, 0]  # Next NDVI value
 
+        # Create all tensors at once
         return {
-            "ndvi": patches,
-            "month": torch.tensor(sequence[..., 1], dtype=torch.float32),
-            "year": torch.tensor(sequence[..., 2], dtype=torch.float32),
-            "lat": torch.tensor(sequence[..., 3], dtype=torch.float32),
-            "lon": torch.tensor(sequence[..., 4], dtype=torch.float32),
-            "target": torch.tensor(target, dtype=torch.float32),
+            "ndvi": torch.from_numpy(padded_patches),
+            "month": torch.from_numpy(sequence[..., 1].astype(np.float32)),
+            "year": torch.from_numpy(sequence[..., 2].astype(np.float32)),
+            "lat": torch.from_numpy(sequence[..., 3].astype(np.float32)),
+            "lon": torch.from_numpy(sequence[..., 4].astype(np.float32)),
+            "target": torch.tensor(self.data[t + self.sequence_length, h, w, 0], dtype=torch.float32),
+            "patch_size": torch.tensor(random_patch_size, dtype=torch.int32),
         }
 
 
@@ -151,7 +188,7 @@ def train_epoch(
     optimizer.zero_grad(set_to_none=True)
 
     # Enable automatic mixed precision for faster training
-    scaler = torch.amp.GradScaler()
+    scaler = torch.cuda.amp.GradScaler()
 
     # Enable automatic memory management
     torch.cuda.empty_cache()
