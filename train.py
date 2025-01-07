@@ -12,20 +12,7 @@ from datetime import datetime
 import gc
 import time
 from tqdm import tqdm  # Add tqdm import
-
-# Training constants
-PATCH_SIZE = 9  # Size of NDVI patches (must be odd)
-BATCH_SIZE = 8192  # Increased batch size for better GPU utilization
-SEQUENCE_LENGTH = 10  # Number of timesteps to use for prediction
-EPOCHS = 30  # Number of epochs to train
-WARMUP_EPOCHS = 5  # Number of epochs to keep learning rate constant
-DATA_SAMPLE_PERCENTAGE = 0.1  # Percentage of data to use for training and validation
-LEARNING_RATE = 2e-3  # Increased learning rate to compensate for larger batch size
-DECAY_GAMMA = 0.95  # Decay rate for learning rate scheduler
-WORKERS = 8  # Reduced number of workers to prevent CPU bottleneck
-PREFETCH_FACTOR = 2  # Reduced prefetch factor to prevent memory issues
-LOG_INTERVAL = 10  # Reduced logging interval for better progress tracking
-GRADIENT_ACCUMULATION_STEPS = 1  # Steps to accumulate gradients before updating parameters
+from config import *  # Import all constants from config.py
 
 class NDVIDataset(Dataset):
     """Dataset for NDVI time series data with on-demand patch computation and random patch size masking"""
@@ -144,8 +131,8 @@ def load_data() -> np.ndarray:
 
 def create_train_val_split(
     data: np.ndarray,
-    train_years: tuple[int, int],
-    val_years: tuple[int, int],
+    train_years: tuple[int, int] = TRAIN_YEARS,
+    val_years: tuple[int, int] = VAL_YEARS,
     sequence_length: int = SEQUENCE_LENGTH,
     patch_size: int = PATCH_SIZE,
 ) -> tuple[DataLoader, DataLoader]:
@@ -197,7 +184,19 @@ def create_train_val_split(
 
 def setup_model(device: torch.device) -> tuple[SpatioTemporalPredictor, torch.optim.Optimizer, torch.optim.lr_scheduler.LRScheduler, torch.nn.Module]:
     """Initialize model, optimizer, scheduler and loss function"""
-    model = SpatioTemporalPredictor(d_model=256, patch_size=PATCH_SIZE, ndvi_embed_dim=32, year_embed_dim=8, latlon_embed_dim=8, num_heads=8, num_layers=3, dropout=0.1).to(device)
+    model = SpatioTemporalPredictor(
+        d_model=MODEL_D_MODEL,
+        patch_size=PATCH_SIZE,
+        ndvi_embed_dim=MODEL_NDVI_EMBED_DIM,
+        year_embed_dim=MODEL_YEAR_EMBED_DIM,
+        latlon_embed_dim=MODEL_LATLON_EMBED_DIM,
+        num_heads=MODEL_NUM_HEADS,
+        num_layers=MODEL_NUM_LAYERS,
+        d_ff=MODEL_D_FF,
+        dropout=MODEL_DROPOUT,
+        max_seq_len=MODEL_MAX_SEQ_LEN,
+        first_year=MODEL_FIRST_YEAR,
+    ).to(device)
 
     optimizer = Adam(model.parameters(), lr=LEARNING_RATE)
     scheduler = ExponentialLR(optimizer, gamma=DECAY_GAMMA)
@@ -408,7 +407,7 @@ def train() -> None:
     logging.info(f"Loaded data with shape: {data.shape}")
 
     # Create train/val split
-    train_loader, val_loader = create_train_val_split(data, train_years=(1984, 2014), val_years=(2015, 2024), sequence_length=SEQUENCE_LENGTH, patch_size=PATCH_SIZE)
+    train_loader, val_loader = create_train_val_split(data, sequence_length=SEQUENCE_LENGTH, patch_size=PATCH_SIZE)
 
     # Setup model, optimizer and criterion
     model, optimizer, scheduler, criterion = setup_model(device)
