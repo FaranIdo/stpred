@@ -36,6 +36,7 @@ class NDVIDataset(Dataset):
             data: Array of shape (timesteps, height, width, features)
             sequence_length: Maximum number of timesteps to use for prediction
             patch_size: Maximum size of NDVI patches (must be odd)
+            sequence_masking: Whether to use variable sequence lengths between batches
         """
         logging.info(f"Initializing NDVIDataset with data shape: {data.shape}")
 
@@ -45,6 +46,7 @@ class NDVIDataset(Dataset):
         self.patch_size = patch_size
         self.pad_size = patch_size // 2
         self.sequence_masking = sequence_masking
+        self.current_sequence_length = sequence_length  # Add current sequence length
         # Pre-compute possible patch sizes (odd numbers from 3 to patch_size)
         self.possible_patch_sizes = np.arange(3, patch_size + 1, 2)
 
@@ -77,6 +79,12 @@ class NDVIDataset(Dataset):
 
         logging.info(f"Dataset initialized with {len(self)} samples")
 
+    def set_sequence_length(self) -> None:
+        """Update the current sequence length if sequence masking is enabled"""
+        if self.sequence_masking:
+            self.current_sequence_length = np.random.randint(1, self.max_sequence_length + 1)
+            print(f"Set sequence length to {self.current_sequence_length}")
+
     def __len__(self) -> int:
         return len(self.valid_indices)
 
@@ -98,19 +106,12 @@ class NDVIDataset(Dataset):
         padded = np.pad(patch, pad_amount, mode="constant", constant_values=0)
         return padded.ravel()
 
-    def _get_random_sequence_length(self) -> int:
-        """Generate random sequence length between 1 and max_sequence_length"""
-        if self.sequence_masking:
-            return np.random.randint(1, self.max_sequence_length + 1)
-        else:
-            return self.max_sequence_length
-
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
-        """Compute patches and metadata on-demand with random patch size and sequence length masking"""
+        """Compute patches and metadata on-demand with random patch size"""
         t, h, w = self.valid_indices[idx]
 
-        # Get random sequence length and patch size for this sample
-        sequence_length = self._get_random_sequence_length()
+        # Use current_sequence_length instead of generating random length per sample
+        sequence_length = self.current_sequence_length
         random_patch_size = self._get_random_patch_size()
 
         # Pre-allocate array for sequence with actual sequence length
@@ -158,13 +159,39 @@ def create_train_val_split(
     train_data = data[train_mask.any(axis=(1, 2))]
     val_data = data[val_mask.any(axis=(1, 2))]
 
-    # Create datasets
-    train_dataset = NDVIDataset(train_data, sequence_length, patch_size)
-    val_dataset = NDVIDataset(val_data, sequence_length, patch_size)
+    # Create datasets with sequence masking enabled for training only
+    train_dataset = NDVIDataset(train_data, sequence_length, patch_size, sequence_masking=True)
+    val_dataset = NDVIDataset(val_data, sequence_length, patch_size, sequence_masking=False)
 
-    # Create dataloaders
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=WORKERS, persistent_workers=True, pin_memory=True, prefetch_factor=PREFETCH_FACTOR)
-    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=WORKERS, persistent_workers=True, pin_memory=True, prefetch_factor=PREFETCH_FACTOR)
+    # Custom batch sampler that updates sequence length before each batch
+    class SequenceLengthBatchSampler:
+        def __init__(self, dataset: NDVIDataset, batch_size: int, shuffle: bool):
+            self.dataset = dataset
+            self.batch_size = batch_size
+            self.shuffle = shuffle
+            self.num_samples = len(dataset)
+
+        def __iter__(self):
+            if self.shuffle:
+                indices = torch.randperm(self.num_samples).tolist()
+            else:
+                indices = list(range(self.num_samples))
+
+            for i in range(0, len(indices), self.batch_size):
+                # Update sequence length before each batch if sequence masking is enabled
+                if self.dataset.sequence_masking:
+                    self.dataset.set_sequence_length()
+                yield indices[i : i + self.batch_size]
+
+        def __len__(self):
+            return (self.num_samples + self.batch_size - 1) // self.batch_size
+
+    # Create dataloaders with custom batch sampler
+    train_batch_sampler = SequenceLengthBatchSampler(train_dataset, BATCH_SIZE, shuffle=True)
+    val_batch_sampler = SequenceLengthBatchSampler(val_dataset, BATCH_SIZE, shuffle=True)
+
+    train_loader = DataLoader(train_dataset, batch_sampler=train_batch_sampler, num_workers=WORKERS, persistent_workers=True, pin_memory=True, prefetch_factor=PREFETCH_FACTOR)
+    val_loader = DataLoader(val_dataset, batch_sampler=val_batch_sampler, num_workers=WORKERS, persistent_workers=True, pin_memory=True, prefetch_factor=PREFETCH_FACTOR)
 
     return train_loader, val_loader
 
