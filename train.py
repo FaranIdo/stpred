@@ -319,7 +319,7 @@ def train() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Create run directory with timestamp under checkpoints
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now().strftime("%d-%m-%Y_%H:%M:%S")
     run_dir = os.path.join("checkpoints", timestamp)
     os.makedirs(run_dir, exist_ok=True)
 
