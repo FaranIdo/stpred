@@ -34,8 +34,9 @@ class NDVIDataset(Dataset):
         self.pad_size = patch_size // 2
         self.sequence_masking = sequence_masking
         self.current_sequence_length = sequence_length  # Add current sequence length
-        # Pre-compute possible patch sizes (odd numbers from 3 to patch_size)
-        self.possible_patch_sizes = np.arange(3, patch_size + 1, 2)
+        # Pre-compute possible patch sizes (odd numbers from 1 to patch_size)
+        # 1 means only the center pixel is used (spectral only)
+        self.possible_patch_sizes = np.arange(1, patch_size + 1, 2)
 
         # Pre-compute padding configurations for each possible patch size
         self.padding_configs = {}
