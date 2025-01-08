@@ -17,7 +17,7 @@ from config import *  # Import all constants from config.py
 class NDVIDataset(Dataset):
     """Dataset for NDVI time series data with on-demand patch computation and random patch size masking"""
 
-    def __init__(self, data: np.ndarray, sequence_length: int = SEQUENCE_LENGTH, patch_size: int = PATCH_SIZE, sequence_masking: bool = False) -> None:
+    def __init__(self, data: np.ndarray, sequence_length: int = TRAIN_SEQUENCE_LENGTH, patch_size: int = PATCH_SIZE, sequence_masking: bool = False) -> None:
         """
         Args:
             data: Array of shape (timesteps, height, width, features)
@@ -133,7 +133,8 @@ def create_train_val_split(
     data: np.ndarray,
     train_years: tuple[int, int] = TRAIN_YEARS,
     val_years: tuple[int, int] = VAL_YEARS,
-    sequence_length: int = SEQUENCE_LENGTH,
+    train_sequence_length: int = TRAIN_SEQUENCE_LENGTH,
+    val_sequence_length: int = VAL_SEQUENCE_LENGTH,
     patch_size: int = PATCH_SIZE,
 ) -> tuple[DataLoader, DataLoader]:
     """Create train/validation splits based on years"""
@@ -145,9 +146,9 @@ def create_train_val_split(
     train_data = data[train_mask.any(axis=(1, 2))]
     val_data = data[val_mask.any(axis=(1, 2))]
 
-    # Create datasets with sequence masking enabled for training only
-    train_dataset = NDVIDataset(train_data, sequence_length, patch_size, sequence_masking=True)
-    val_dataset = NDVIDataset(val_data, sequence_length, patch_size, sequence_masking=False)
+    # Create datasets with sequence masking enabled
+    train_dataset = NDVIDataset(train_data, train_sequence_length, patch_size, sequence_masking=True)
+    val_dataset = NDVIDataset(val_data, val_sequence_length, patch_size, sequence_masking=True)
 
     # Custom batch sampler that updates sequence length before each batch
     class SequenceLengthBatchSampler:
@@ -407,7 +408,7 @@ def train() -> None:
     logging.info(f"Loaded data with shape: {data.shape}")
 
     # Create train/val split
-    train_loader, val_loader = create_train_val_split(data, sequence_length=SEQUENCE_LENGTH, patch_size=PATCH_SIZE)
+    train_loader, val_loader = create_train_val_split(data)
 
     # Setup model, optimizer and criterion
     model, optimizer, scheduler, criterion = setup_model(device)

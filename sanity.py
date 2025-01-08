@@ -7,7 +7,7 @@ from config import *  # Import all constants from config.py
 def test_stpred():
     # Test parameters
     batch_size = 20
-    seq_len = SEQUENCE_LENGTH
+    seq_len = TRAIN_SEQUENCE_LENGTH
     patch_size = PATCH_SIZE
 
     # Create model

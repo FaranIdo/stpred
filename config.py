@@ -2,8 +2,9 @@
 
 # Data parameters
 PATCH_SIZE = 9  # Size of NDVI patches (must be odd)
-SEQUENCE_LENGTH = 30  # Number of timesteps to use for prediction
 DATA_SAMPLE_PERCENTAGE = 0.5  # Percentage of data to use for training and validation
+TRAIN_SEQUENCE_LENGTH = 20  # Number of timesteps to use for training
+VAL_SEQUENCE_LENGTH = 20  # Number of timesteps to use for validation
 
 # Training parameters
 BATCH_SIZE = 16384  # Increased batch size for better GPU utilization
@@ -31,5 +32,5 @@ MODEL_MAX_SEQ_LEN = 5000  # Maximum sequence length for positional encoding
 MODEL_FIRST_YEAR = 1984  # Reference year for year encoding
 
 # Training/validation split years
-TRAIN_YEARS = (1984, 2014)
-VAL_YEARS = (2015, 2024)
+TRAIN_YEARS = (1984, 2013)
+VAL_YEARS = (2014, 2024)
