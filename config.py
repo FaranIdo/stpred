@@ -2,7 +2,7 @@
 
 # Data parameters
 PATCH_SIZE = 9  # Size of NDVI patches (must be odd)
-SEQUENCE_LENGTH = 10  # Number of timesteps to use for prediction
+SEQUENCE_LENGTH = 30  # Number of timesteps to use for prediction
 DATA_SAMPLE_PERCENTAGE = 0.5  # Percentage of data to use for training and validation
 
 # Training parameters
