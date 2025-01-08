@@ -107,6 +107,9 @@ class NDVIDataset(Dataset):
         for i in range(sequence_length):
             padded_patches[i] = self._extract_and_pad_patch(t + i, h, w, random_patch_size)
 
+        # set zeros in the last row which it the target
+        padded_patches[sequence_length] = np.zeros(self.patch_size * self.patch_size, dtype=np.float32)
+
         # Calculate available future window and randomly select target
         available_future = len(self.data) - (t + sequence_length)
         if available_future > 0:
