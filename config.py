@@ -3,7 +3,7 @@
 # Data parameters
 PATCH_SIZE = 9  # Size of NDVI patches (must be odd)
 DATA_SAMPLE_PERCENTAGE = 0.5  # Percentage of data to use for training and validation
-TRAIN_SEQUENCE_LENGTH = 20  # Number of timesteps to use for training
+TRAIN_SEQUENCE_LENGTH = 24  # Number of timesteps to use for training
 VAL_SEQUENCE_LENGTH = 20  # Number of timesteps to use for validation
 
 # Training parameters
