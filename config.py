@@ -3,10 +3,10 @@
 # Data parameters
 PATCH_SIZE = 9  # Size of NDVI patches (must be odd)
 SEQUENCE_LENGTH = 10  # Number of timesteps to use for prediction
-DATA_SAMPLE_PERCENTAGE = 0.1  # Percentage of data to use for training and validation
+DATA_SAMPLE_PERCENTAGE = 0.5  # Percentage of data to use for training and validation
 
 # Training parameters
-BATCH_SIZE = 8192  # Increased batch size for better GPU utilization
+BATCH_SIZE = 16384  # Increased batch size for better GPU utilization
 EPOCHS = 30  # Number of epochs to train
 WARMUP_EPOCHS = 5  # Number of epochs to keep learning rate constant
 LEARNING_RATE = 2e-3  # Increased learning rate to compensate for larger batch size
@@ -14,8 +14,8 @@ DECAY_GAMMA = 0.95  # Decay rate for learning rate scheduler
 GRADIENT_ACCUMULATION_STEPS = 1
 
 # DataLoader parameters
-WORKERS = 8  # Reduced number of workers to prevent CPU bottleneck
-PREFETCH_FACTOR = 2  # Reduced prefetch factor to prevent memory issues
+WORKERS = 24  # Reduced number of workers to prevent CPU bottleneck
+PREFETCH_FACTOR = 4  # Reduced prefetch factor to prevent memory issues
 LOG_INTERVAL = 10  # Reduced logging interval for better progress tracking
 
 # Model parameters
