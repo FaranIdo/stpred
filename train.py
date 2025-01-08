@@ -100,24 +100,43 @@ class NDVIDataset(Dataset):
         sequence_length = self.current_sequence_length
         random_patch_size = self._get_random_patch_size()
 
-        # Pre-allocate array for sequence with actual sequence length
-        padded_patches = np.empty((sequence_length, self.patch_size * self.patch_size), dtype=np.float32)
+        # Pre-allocate array for sequence with actual sequence length - plus one for the target
+        padded_patches = np.empty((sequence_length + 1, self.patch_size * self.patch_size), dtype=np.float32)
 
         # Extract and pad patches for the sequence
         for i in range(sequence_length):
             padded_patches[i] = self._extract_and_pad_patch(t + i, h, w, random_patch_size)
 
-        # Extract metadata for the sequence
-        sequence = self.data[t : t + sequence_length, h, w]  # (seq_len, features)
+        # Calculate available future window and randomly select target
+        available_future = len(self.data) - (t + sequence_length)
+        if available_future > 0:
+            target_offset = np.random.randint(0, available_future)
+            target_t = t + sequence_length + target_offset
+        else:
+            # Fallback if no future data available (shouldn't happen with proper valid_indices)
+            target_offset = 0
+            target_t = t + sequence_length
+
+        # Extract sequence and target metadata efficiently
+        sequence = self.data[t : t + sequence_length, h, w]  # (sequence_length, features)
+        target = self.data[target_t, h, w]  # (features,)
+
+        # Create metadata arrays with target appended
+        month = np.concatenate([sequence[..., 1], [target[1]]]).astype(np.float32)
+        year = np.concatenate([sequence[..., 2], [target[2]]]).astype(np.float32)
+        lat = np.concatenate([sequence[..., 3], [target[3]]]).astype(np.float32)
+        lon = np.concatenate([sequence[..., 4], [target[4]]]).astype(np.float32)
 
         # Create all tensors at once
         return {
             "ndvi": torch.from_numpy(padded_patches),
-            "month": torch.from_numpy(sequence[..., 1].astype(np.float32)),
-            "year": torch.from_numpy(sequence[..., 2].astype(np.float32)),
-            "lat": torch.from_numpy(sequence[..., 3].astype(np.float32)),
-            "lon": torch.from_numpy(sequence[..., 4].astype(np.float32)),
-            "target": torch.tensor(self.data[t + sequence_length, h, w, 0], dtype=torch.float32),
+            "month": torch.from_numpy(month),
+            "year": torch.from_numpy(year),
+            "lat": torch.from_numpy(lat),
+            "lon": torch.from_numpy(lon),
+            "target": torch.tensor(target[0], dtype=torch.float32),
+            # "target_offset": torch.tensor(target_offset, dtype=torch.int32),
+            # "target_t": torch.tensor(target_t, dtype=torch.int32),
             "patch_size": torch.tensor(random_patch_size, dtype=torch.int32),
             "sequence_length": torch.tensor(sequence_length, dtype=torch.int32),
         }

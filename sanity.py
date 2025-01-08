@@ -64,6 +64,9 @@ def test_ndvidataset_getitem():
     expected_keys = {"ndvi", "month", "year", "lat", "lon", "target", "patch_size", "sequence_length"}
     assert set(sample.keys()) == expected_keys
 
+    # Actual sequence length is one more than the sequence length because of the target value
+    sequence_length += 1
+
     # Test shapes
     assert sample["ndvi"].shape == (sequence_length, patch_size * patch_size)
     assert sample["month"].shape == (sequence_length,)
@@ -103,12 +106,24 @@ def test_ndvidataset_sequence_lengths():
     height = 50
     width = 40
     features = 5  # [ndvi, month, year, lat, lon]
-    data = np.random.rand(timesteps, height, width, features)
+    data = np.zeros((timesteps, height, width, features))
+    t_values = np.arange(timesteps)
+    h_values = np.linspace(30, 31, height)
+    w_values = np.linspace(30, 31, width)
+
+    data[..., 0] = np.sin(t_values[:, None, None] / 10)  # NDVI values as a sine wave over time
+    data[..., 1] = (t_values[:, None, None] % 12) + 1  # Month values cycling from 1 to 12
+    data[..., 2] = 1984 + (t_values[:, None, None] // 12)  # Year values starting from 1984
+    data[..., 3] = h_values[None, :, None]  # Latitude values ranging from 30 to 31
+    data[..., 4] = w_values[None, None, :]  # Longitude values ranging from 30 to 31
 
     # Initialize dataset with a large sequence length
     max_sequence_length = 80
     patch_size = 21
     dataset = NDVIDataset(data, sequence_length=max_sequence_length, patch_size=patch_size, sequence_masking=True)
+
+    # Add one to the max sequence length because of the target value
+    max_sequence_length += 1
 
     # Get multiple samples and check their sequence lengths
     num_samples = 50
@@ -124,6 +139,9 @@ def test_ndvidataset_sequence_lengths():
         # Verify the sample's sequence length matches the dataset's current sequence length
         assert curr_seq_len == sample_seq_len, f"Sample sequence length {sample_seq_len} doesn't match dataset's current sequence length {curr_seq_len}"
         sequence_lengths.append(curr_seq_len)
+
+        # Add one to the sequence length because of the target value
+        curr_seq_len += 1
 
         # Basic assertions for each sample
         assert curr_seq_len >= 1, f"Sequence length should be greater than 1, got {curr_seq_len}"
