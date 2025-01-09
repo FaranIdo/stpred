@@ -415,7 +415,7 @@ def train(run_name: str | None = None) -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Create run directory with timestamp under checkpoints
-    timestamp = datetime.now().strftime("%d-%m-%Y_%H:%M:%S")
+    timestamp = datetime.now().strftime("%d-%m-%Y_%H-%M-%S")
     # Append run_name to timestamp if provided
     if run_name:
         timestamp = f"{timestamp}_{run_name}"
