@@ -12,6 +12,7 @@ from datetime import datetime
 import gc
 import time
 from tqdm import tqdm  # Add tqdm import
+import argparse  # Add argparse import
 from config import *  # Import all constants from config.py
 
 class NDVIDataset(Dataset):
@@ -408,13 +409,16 @@ def setup_logging(run_dir: str) -> None:
     logger.addHandler(console_handler)
 
 
-def train() -> None:
+def train(run_name: str | None = None) -> None:
     """Main training function"""
     # Set device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Create run directory with timestamp under checkpoints
     timestamp = datetime.now().strftime("%d-%m-%Y_%H:%M:%S")
+    # Append run_name to timestamp if provided
+    if run_name:
+        timestamp = f"{timestamp}_{run_name}"
     run_dir = os.path.join("checkpoints", timestamp)
     os.makedirs(run_dir, exist_ok=True)
 
@@ -462,7 +466,10 @@ def train() -> None:
         # Save best model
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
+            logging.info(f"New best validation loss,: {best_val_loss:.6f}, saving checkpoint")
             save_checkpoint(model, optimizer, epoch, avg_train_loss, avg_val_loss, run_dir)
+        else:
+            logging.info(f"Validation loss did not improve, current loss: {avg_val_loss:.6f}, best loss: {best_val_loss:.6f}")
 
         logging.info("-" * 50)
 
@@ -471,4 +478,12 @@ def train() -> None:
 
 
 if __name__ == "__main__":
-    train()
+    # Setup argument parser
+    parser = argparse.ArgumentParser(description="Train the SpatioTemporal Predictor model")
+    parser.add_argument("--name", type=str, help="Optional name to append to the run directory", default=None)
+
+    # Parse arguments
+    args = parser.parse_args()
+
+    # Call train with the optional name
+    train(run_name=args.name)
