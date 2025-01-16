@@ -113,7 +113,7 @@ def calculate_and_log_statistics(predictions: np.ndarray, targets: np.ndarray, n
         logging.info(f"{idx:5d}\t{ground_truth:.4f}\t{prediction:.4f}\t{abs_error:.4f}")
 
 
-def evaluate(checkpoint_path: str, subset_size: float = 0.1) -> None:
+def evaluate(checkpoint_path: str, subset_size: float = 0.5) -> None:
     """Evaluate model on test set"""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logging.info(f"Using device: {device}")
@@ -251,7 +251,7 @@ def evaluate_configuration(model: torch.nn.Module, data: np.ndarray, patch_size:
     return rme, l1_score, l2_score, f1
 
 
-def generate_performance_table(checkpoint_path: str, patch_sizes: list[int] = [3, 5, 7, 9], sequence_lengths: list[int] = [1, 5, 10, 15, 20], subset_size: float = 0.1) -> pd.DataFrame:
+def generate_performance_table(checkpoint_path: str, patch_sizes: list[int] = [1, 3, 5, 7, 9], sequence_lengths: list[int] = [1, 5, 10, 15, 20], subset_size: float = 0.1) -> pd.DataFrame:
     """
     Generate a performance metrics table for different spatial and sequence configurations.
 
