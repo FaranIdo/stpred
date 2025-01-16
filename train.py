@@ -18,13 +18,14 @@ from config import *  # Import all constants from config.py
 class NDVIDataset(Dataset):
     """Dataset for NDVI time series data with on-demand patch computation and random patch size masking"""
 
-    def __init__(self, data: np.ndarray, sequence_length: int = TRAIN_SEQUENCE_LENGTH, patch_size: int = PATCH_SIZE, sequence_masking: bool = False) -> None:
+    def __init__(self, data: np.ndarray, sequence_length: int = TRAIN_SEQUENCE_LENGTH, patch_size: int = PATCH_SIZE, sequence_masking: bool = False, specific_patch_size: int | None = None) -> None:
         """
         Args:
             data: Array of shape (timesteps, height, width, features)
             sequence_length: Maximum number of timesteps to use for prediction
             patch_size: Maximum size of NDVI patches (must be odd)
             sequence_masking: Whether to use variable sequence lengths between batches
+            specific_patch_size: If set, use this fixed patch size instead of random
         """
         logging.info(f"Initializing NDVIDataset with data shape: {data.shape}")
 
@@ -35,6 +36,7 @@ class NDVIDataset(Dataset):
         self.pad_size = patch_size // 2
         self.sequence_masking = sequence_masking
         self.current_sequence_length = sequence_length  # Add current sequence length
+        self.specific_patch_size = specific_patch_size
         # Pre-compute possible patch sizes (odd numbers from 1 to patch_size)
         # 1 means only the center pixel is used (spectral only)
         self.possible_patch_sizes = np.arange(1, patch_size + 1, 2)
@@ -77,7 +79,9 @@ class NDVIDataset(Dataset):
         return len(self.valid_indices)
 
     def _get_random_patch_size(self) -> int:
-        """Generate random odd patch size less than or equal to PATCH_SIZE"""
+        """Generate random odd patch size less than or equal to PATCH_SIZE, or use specific size if set"""
+        if self.specific_patch_size is not None:
+            return self.specific_patch_size
         return np.random.choice(self.possible_patch_sizes)
 
     def _extract_and_pad_patch(self, t: int, h: int, w: int, random_patch_size: int) -> np.ndarray:
