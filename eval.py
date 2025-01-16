@@ -12,9 +12,30 @@ from config import *
 import pandas as pd
 
 
-def setup_logging():
-    """Setup basic logging"""
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+def setup_logging(checkpoint_path: str) -> None:
+    """Setup logging to both file and console"""
+    # Get model directory from checkpoint path
+    model_dir = os.path.dirname(os.path.dirname(checkpoint_path))
+
+    # Create formatter
+    formatter = logging.Formatter("%(asctime)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+
+    # Setup file handler
+    log_file = os.path.join(model_dir, "eval.log")
+    file_handler = logging.FileHandler(log_file)
+    file_handler.setFormatter(formatter)
+
+    # Setup console handler
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+
+    # Setup logger
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
+
+    logging.info(f"Saving evaluation results to {model_dir}")
 
 
 def load_model(checkpoint_path: str, device: torch.device) -> torch.nn.Module:
@@ -314,7 +335,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Setup logging
-    setup_logging()
+    setup_logging(args.checkpoint)
 
     if args.generate_table:
         # Generate and display the performance table
@@ -324,8 +345,11 @@ if __name__ == "__main__":
         print("\nPerformance Metrics Table:")
         print(df.to_string(float_format=lambda x: "{:.3f}".format(x)))
 
+        # Get model directory from checkpoint path
+        model_dir = os.path.dirname(os.path.dirname(args.checkpoint))
+        output_path = os.path.join(model_dir, "performance_metrics.csv")
+
         # Save to CSV with headers indicating types
-        output_path = "performance_metrics.csv"
         header = "sequence_length[int],patch_size[int],rme[float],l1_mae[float],l2_mse[float],f1_score[float]"
         df.to_csv(output_path, index=False, float_format="%.3f")
 
