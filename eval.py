@@ -174,7 +174,6 @@ def evaluate(checkpoint_path: str, subset_size: float = 0.5) -> None:
         for batch in tqdm(test_loader, desc="Evaluating", unit="batch"):
             # Move batch to device
             batch = {k: v.to(device) for k, v in batch.items()}
-
             # Forward pass
             predictions, _ = model(batch["ndvi"], batch["month"], batch["year"], batch["lat"], batch["lon"])
             predictions = predictions.squeeze(-1)
@@ -217,10 +216,10 @@ def evaluate(checkpoint_path: str, subset_size: float = 0.5) -> None:
     calculate_and_log_statistics(all_predictions, all_targets)
 
 
-def evaluate_configuration(model: torch.nn.Module, data: np.ndarray, patch_size: int, sequence_length: int, device: torch.device, subset_size: float = 0.1) -> tuple[float, float, float, float]:
+def evaluate_configuration(model: torch.nn.Module, data: np.ndarray, patch_size: int, sequence_length: int, device: torch.device, subset_size: float = 0.1) -> tuple[float, float, float, float, float]:
     """
     Evaluate model for a specific patch size and sequence length configuration.
-    Returns RME, L1 (MAE), L2 (MSE), and F1 score.
+    Returns RME, L1 (MAE), L2 (MSE), F1 score, and R² score.
     """
     logging.info(f"Evaluating configuration: Patch {patch_size}x{patch_size}, Sequence Length {sequence_length}")
 
@@ -243,6 +242,7 @@ def evaluate_configuration(model: torch.nn.Module, data: np.ndarray, patch_size:
     with torch.no_grad():
         for batch in tqdm(test_loader, desc=f"Patch {patch_size}x{patch_size}, Seq {sequence_length}", leave=False):
             batch = {k: v.to(device) for k, v in batch.items()}
+
             predictions, _ = model(batch["ndvi"], batch["month"], batch["year"], batch["lat"], batch["lon"])
             predictions = predictions.squeeze(-1)
 
@@ -268,8 +268,11 @@ def evaluate_configuration(model: torch.nn.Module, data: np.ndarray, patch_size:
     target_binary = (all_targets >= 0.5).astype(int)
     f1 = float(f1_score(target_binary, pred_binary))
 
-    logging.info(f"Results - RME: {rme:.4f}, L1: {l1_score:.4f}, L2: {l2_score:.4f}, F1: {f1:.4f}")
-    return rme, l1_score, l2_score, f1
+    # Calculate R² score
+    r2 = float(r2_score(all_targets, all_predictions))
+
+    logging.info(f"Results - RME: {rme:.4f}, L1: {l1_score:.4f}, L2: {l2_score:.4f}, F1: {f1:.4f}, R²: {r2:.4f}")
+    return rme, l1_score, l2_score, f1, r2
 
 
 def generate_performance_table(checkpoint_path: str, patch_sizes: list[int] = [1, 3, 5, 7, 9], sequence_lengths: list[int] = [1, 5, 10, 15, 20], subset_size: float = 0.1) -> pd.DataFrame:
@@ -295,7 +298,7 @@ def generate_performance_table(checkpoint_path: str, patch_sizes: list[int] = [1
     model.eval()
 
     # Initialize results lists
-    results = {"sequence_length": [], "patch_size": [], "rme": [], "l1_mae": [], "l2_mse": [], "f1_score": []}  # int  # int  # float  # float  # float  # float
+    results = {"sequence_length": [], "patch_size": [], "rme": [], "l1_mae": [], "l2_mse": [], "f1_score": [], "r2_score": []}
 
     # Calculate total configurations
     total_configs = len(patch_sizes) * len(sequence_lengths)
@@ -307,7 +310,7 @@ def generate_performance_table(checkpoint_path: str, patch_sizes: list[int] = [1
             current_config += 1
             logging.info(f"\nProgress: {current_config}/{total_configs} configurations")
 
-            rme, l1, l2, f1 = evaluate_configuration(model, data, patch_size, seq_length, device, subset_size)
+            rme, l1, l2, f1, r2 = evaluate_configuration(model, data, patch_size, seq_length, device, subset_size)
 
             # Store results
             results["sequence_length"].append(seq_length)
@@ -316,10 +319,11 @@ def generate_performance_table(checkpoint_path: str, patch_sizes: list[int] = [1
             results["l1_mae"].append(l1)
             results["l2_mse"].append(l2)
             results["f1_score"].append(f1)
+            results["r2_score"].append(r2)
 
     # Create DataFrame with proper column types
     df = pd.DataFrame(results)
-    df = df.astype({"sequence_length": "int32", "patch_size": "int32", "rme": "float32", "l1_mae": "float32", "l2_mse": "float32", "f1_score": "float32"})
+    df = df.astype({"sequence_length": "int32", "patch_size": "int32", "rme": "float32", "l1_mae": "float32", "l2_mse": "float32", "f1_score": "float32", "r2_score": "float32"})
 
     return df
 
@@ -350,7 +354,7 @@ if __name__ == "__main__":
         output_path = os.path.join(model_dir, "performance_metrics.csv")
 
         # Save to CSV with headers indicating types
-        header = "sequence_length[int],patch_size[int],rme[float],l1_mae[float],l2_mse[float],f1_score[float]"
+        header = "sequence_length[int],patch_size[int],rme[float],l1_mae[float],l2_mse[float],f1_score[float],r2_score[float]"
         df.to_csv(output_path, index=False, float_format="%.3f")
 
         logging.info(f"Saved performance metrics table to {output_path}")
