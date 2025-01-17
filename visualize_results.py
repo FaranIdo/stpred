@@ -120,9 +120,9 @@ def plot_comparison(predictions: np.ndarray, targets: np.ndarray, start_x: int, 
     month_names = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
 
     # Create figure with adjusted spacing and left margin
-    fig = plt.figure(figsize=(4 * num_timepoints - 4, 6))  # Reduced width more by subtracting 4
+    fig = plt.figure(figsize=(5 * num_timepoints - 4, 8))  # Increased multiplier from 4 to 5 and height from 6 to 8
     # Add left margin for labels
-    gs = fig.add_gridspec(2, num_timepoints, hspace=0.02, wspace=0.0, left=0.02)  # Removed spacing between columns
+    gs = fig.add_gridspec(2, num_timepoints, hspace=0.1, wspace=0.0, left=0.02)
     axes = gs.subplots()
 
     # Handle the case when there's only one timepoint
@@ -150,13 +150,18 @@ def plot_comparison(predictions: np.ndarray, targets: np.ndarray, start_x: int, 
     cax = fig.add_axes([0.92, 0.15, 0.02, 0.7])  # Moved slightly left from 0.95 to 0.92
     plt.colorbar(im1, cax=cax, orientation="vertical", label="NDVI Value")
 
-    # Save with tighter padding
-    plt.savefig(os.path.join(output_dir, f"ndvi_comparison_{start_x}_{start_y}_{area_size}.png"), dpi=300, bbox_inches="tight", pad_inches=0.05)  # Reduced pad_inches from 0.1 to 0.05
+    # Save with maximum quality
+    plt.savefig(
+        os.path.join(output_dir, f"ndvi_comparison_{start_x}_{start_y}_{area_size}.png"),
+        dpi=600,
+        bbox_inches="tight",
+        pad_inches=0.05,  # Increased DPI from 300 to 600
+    )  # Added maximum quality parameter
     plt.close()
 
     # Create error plot with adjusted spacing
-    error_fig = plt.figure(figsize=(4 * num_timepoints - 4, 3))  # Reduced width more
-    gs_error = error_fig.add_gridspec(1, num_timepoints, wspace=0.0)  # Removed spacing between columns
+    error_fig = plt.figure(figsize=(5 * num_timepoints - 4, 4))  # Increased size here too
+    gs_error = error_fig.add_gridspec(1, num_timepoints, wspace=0.0)
     error_axes = gs_error.subplots()
 
     # Handle the case when there's only one timepoint
@@ -173,8 +178,8 @@ def plot_comparison(predictions: np.ndarray, targets: np.ndarray, start_x: int, 
     error_cax = error_fig.add_axes([0.92, 0.15, 0.02, 0.7])  # Moved slightly left from 0.95 to 0.92
     plt.colorbar(im, cax=error_cax, orientation="vertical", label="Absolute Error")
 
-    # Save error plot with adjusted spacing
-    plt.savefig(os.path.join(output_dir, f"error_map_{start_x}_{start_y}_{area_size}.png"), dpi=300, bbox_inches="tight", pad_inches=0.1)
+    # Save error plot with maximum quality
+    plt.savefig(os.path.join(output_dir, f"error_map_{start_x}_{start_y}_{area_size}.png"), dpi=600, bbox_inches="tight", pad_inches=0.05)  # Increased DPI  # Added maximum quality parameter
     plt.close()
 
 
