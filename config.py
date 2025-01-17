@@ -2,12 +2,12 @@
 
 # Data parameters
 PATCH_SIZE = 9  # Size of NDVI patches (must be odd)
-DATA_SAMPLE_PERCENTAGE = 0.5  # Percentage of data to use for training and validation
+DATA_SAMPLE_PERCENTAGE = 0.95  # Percentage of data to use for training and validation
 TRAIN_SEQUENCE_LENGTH = 20  # Number of timesteps to use for training
 VAL_SEQUENCE_LENGTH = 20  # Number of timesteps to use for validation
 
 # Training parameters
-BATCH_SIZE = 16384  # Increased batch size for better GPU utilization
+BATCH_SIZE = int(16384)  # Increased batch size for better GPU utilization
 EPOCHS = 30  # Number of epochs to train
 WARMUP_EPOCHS = 5  # Number of epochs to keep learning rate constant
 LEARNING_RATE = 2e-3  # Increased learning rate to compensate for larger batch size
@@ -15,7 +15,7 @@ DECAY_GAMMA = 0.95  # Decay rate for learning rate scheduler
 GRADIENT_ACCUMULATION_STEPS = 1
 
 # DataLoader parameters
-WORKERS = 24  # Reduced number of workers to prevent CPU bottleneck
+WORKERS = 28  # Reduced number of workers to prevent CPU bottleneck
 PREFETCH_FACTOR = 4  # Reduced prefetch factor to prevent memory issues
 LOG_INTERVAL = 10  # Reduced logging interval for better progress tracking
 
@@ -24,8 +24,8 @@ MODEL_D_MODEL = 256  # Model dimension
 MODEL_NUM_HEADS = 8  # Number of attention heads
 MODEL_NUM_LAYERS = 3  # Number of transformer layers
 MODEL_D_FF = 1024  # Feed-forward hidden dimension
-MODEL_DROPOUT = 0.1  # Dropout probability
-MODEL_NDVI_EMBED_DIM = 32  # NDVI embedding dimension
+MODEL_DROPOUT = 0.2  # Dropout probability
+MODEL_NDVI_EMBED_DIM = 32 * 4  # NDVI embedding dimension
 MODEL_YEAR_EMBED_DIM = 8  # Year embedding dimension
 MODEL_LATLON_EMBED_DIM = 8  # Lat/lon embedding dimension
 MODEL_MAX_SEQ_LEN = 5000  # Maximum sequence length for positional encoding
