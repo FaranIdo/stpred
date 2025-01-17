@@ -34,20 +34,24 @@ def setup_visualization_logging(output_dir: str) -> None:
     logger.addHandler(console_handler)
 
 
-def get_predictions(model: torch.nn.Module, data: np.ndarray, start_x: int, start_y: int, area_size: int, device: torch.device) -> Tuple[np.ndarray, np.ndarray]:
-    """Get model predictions for a specific area by processing all pixels at once"""
+def get_predictions(model: torch.nn.Module, data: np.ndarray, start_x: int, start_y: int, area_size: int, start_year: int, start_month: int, device: torch.device) -> Tuple[np.ndarray, np.ndarray]:
+    """Get model predictions for a specific area and time by processing all pixels at once"""
     model.eval()
 
-    # Create dataset for the specific area
-    test_mask = (data[..., 2] >= VAL_YEARS[0]) & (data[..., 2] <= VAL_YEARS[1])
-    test_data = data[test_mask.any(axis=(1, 2))]
+    # Find the target timestep that matches our desired year and month
+    time_mask = (data[..., 2] == start_year) & (data[..., 1] == start_month)
+    target_timestep = np.where(time_mask.any(axis=(1, 2)))[0][0]
 
-    # Extract just the area we want - note the time dimension comes first
-    area_data = test_data[:, start_y : start_y + area_size, start_x : start_x + area_size, :]
+    # Get 6 consecutive timesteps ending at our target time
+    sequence_length = 20  # 5 input timesteps + 1 target timestep
+    start_timestep = target_timestep - sequence_length + 1
+    selected_data = data[start_timestep : target_timestep + 1]
+
+    # Extract just the area we want
+    area_data = selected_data[:, start_y : start_y + area_size, start_x : start_x + area_size, :]
 
     # Get dimensions
     num_timesteps, height, width, num_features = area_data.shape
-    sequence_length = 6  # 5 input timesteps + 1 target timestep
 
     # Create patches for each pixel
     patches = np.zeros((height, width, sequence_length, PATCH_SIZE, PATCH_SIZE))  # Only for NDVI
@@ -110,67 +114,112 @@ def get_predictions(model: torch.nn.Module, data: np.ndarray, start_x: int, star
     return predictions, targets
 
 
-def plot_comparison(predictions: np.ndarray, targets: np.ndarray, start_x: int, start_y: int, area_size: int, output_dir: str) -> None:
-    """Plot ground truth vs predictions comparison for single timestep"""
-    # Create figure with two subplots side by side
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
-    fig.suptitle("NDVI Comparison: Ground Truth vs Predictions", fontsize=16)
+def plot_comparison(predictions: np.ndarray, targets: np.ndarray, start_x: int, start_y: int, area_size: int, time_points: list[tuple[int, int]], output_dir: str) -> None:
+    """Plot ground truth vs predictions comparison for multiple timesteps"""
+    num_timepoints = len(time_points)
+    month_names = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
 
-    # Plot ground truth
-    im1 = ax1.imshow(targets, cmap="YlGn", vmin=0, vmax=1)
-    ax1.set_title("Ground Truth")
-    ax1.axis("off")
+    # Create figure with adjusted spacing and left margin
+    fig = plt.figure(figsize=(4 * num_timepoints - 4, 6))  # Reduced width more by subtracting 4
+    # Add left margin for labels
+    gs = fig.add_gridspec(2, num_timepoints, hspace=0.02, wspace=0.0, left=0.02)  # Removed spacing between columns
+    axes = gs.subplots()
 
-    # Plot prediction
-    im2 = ax2.imshow(predictions, cmap="YlGn", vmin=0, vmax=1)
-    ax2.set_title("Prediction")
-    ax2.axis("off")
+    # Handle the case when there's only one timepoint
+    if num_timepoints == 1:
+        axes = axes.reshape(2, 1)
 
-    # Add colorbar
-    plt.colorbar(im1, ax=[ax1, ax2], label="NDVI Value")
+    # Create a common colorbar for all plots
+    vmin, vmax = 0, 1
 
-    # Add error plot
-    error = np.abs(predictions - targets)
-    error_fig = plt.figure(figsize=(10, 8))
-    plt.imshow(error, cmap="Reds", vmin=0, vmax=1)
-    plt.colorbar(label="Absolute Error")
-    plt.title("Prediction Error")
-    plt.axis("off")
-    plt.savefig(os.path.join(output_dir, f"error_map_{start_x}_{start_y}_{area_size}.png"))
-    plt.close(error_fig)
+    # Move row labels much closer to the plots
+    fig.text(0.005, 0.7, "Ground Truth", fontsize=22, rotation=90, va="center")
+    fig.text(0.005, 0.3, "Prediction", fontsize=22, rotation=90, va="center")
 
-    # Save comparison plot
-    plt.savefig(os.path.join(output_dir, f"ndvi_comparison_{start_x}_{start_y}_{area_size}.png"), dpi=300)
+    for idx, ((year, month), target, pred) in enumerate(zip(time_points, targets, predictions)):
+        # Plot ground truth
+        im1 = axes[0, idx].imshow(target, cmap="YlGn", vmin=vmin, vmax=vmax)
+        axes[0, idx].set_title(f"{month_names[month-1]} {year}", fontsize=24, pad=10)
+        axes[0, idx].axis("off")
+
+        # Plot prediction
+        im2 = axes[1, idx].imshow(pred, cmap="YlGn", vmin=vmin, vmax=vmax)
+        axes[1, idx].axis("off")
+
+    # Add vertical colorbar with adjusted positioning
+    cax = fig.add_axes([0.92, 0.15, 0.02, 0.7])  # Moved slightly left from 0.95 to 0.92
+    plt.colorbar(im1, cax=cax, orientation="vertical", label="NDVI Value")
+
+    # Save with tighter padding
+    plt.savefig(os.path.join(output_dir, f"ndvi_comparison_{start_x}_{start_y}_{area_size}.png"), dpi=300, bbox_inches="tight", pad_inches=0.05)  # Reduced pad_inches from 0.1 to 0.05
+    plt.close()
+
+    # Create error plot with adjusted spacing
+    error_fig = plt.figure(figsize=(4 * num_timepoints - 4, 3))  # Reduced width more
+    gs_error = error_fig.add_gridspec(1, num_timepoints, wspace=0.0)  # Removed spacing between columns
+    error_axes = gs_error.subplots()
+
+    # Handle the case when there's only one timepoint
+    if num_timepoints == 1:
+        error_axes = np.array([error_axes])
+
+    for idx, ((year, month), target, pred) in enumerate(zip(time_points, targets, predictions)):
+        error = np.abs(pred - target)
+        im = error_axes[idx].imshow(error, cmap="Reds", vmin=0, vmax=1)
+        error_axes[idx].set_title(f"Error - {month_names[month-1]} {year}", fontsize=24, pad=10)
+        error_axes[idx].axis("off")
+
+    # Add vertical colorbar with adjusted positioning for error plot
+    error_cax = error_fig.add_axes([0.92, 0.15, 0.02, 0.7])  # Moved slightly left from 0.95 to 0.92
+    plt.colorbar(im, cax=error_cax, orientation="vertical", label="Absolute Error")
+
+    # Save error plot with adjusted spacing
+    plt.savefig(os.path.join(output_dir, f"error_map_{start_x}_{start_y}_{area_size}.png"), dpi=300, bbox_inches="tight", pad_inches=0.1)
     plt.close()
 
 
-def visualize_predictions(checkpoint_path: str, start_x: int, start_y: int, area_size: int, output_dir: str, batch_size: int = 32) -> None:
-    """Visualize model predictions for a specific area"""
-    # Setup
+def visualize_predictions(checkpoint_path: str, start_x: int, start_y: int, area_size: int, time_points: list[tuple[int, int]], output_dir: str, batch_size: int = 32) -> None:
+    """Visualize model predictions for a specific area across multiple time points
+
+    Args:
+        checkpoint_path: Path to model checkpoint
+        start_x: Starting X coordinate
+        start_y: Starting Y coordinate
+        area_size: Size of area to visualize
+        time_points: List of (year, month) tuples
+        output_dir: Output directory for plots
+        batch_size: Batch size for processing
+    """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     setup_visualization_logging(output_dir)
     logging.info(f"Using device: {device}")
 
-    # Load data and model
     data = load_data()
     model = load_model(checkpoint_path, device)
 
-    # Get predictions
-    predictions, targets = get_predictions(model, data, start_x, start_y, area_size, device)
+    all_predictions = []
+    all_targets = []
+    all_metrics = []
+
+    for year, month in time_points:
+        predictions, targets = get_predictions(model, data, start_x, start_y, area_size, year, month, device)
+        all_predictions.append(predictions)
+        all_targets.append(targets)
+
+        # Calculate error metrics
+        mae = np.mean(np.abs(predictions - targets))
+        mse = np.mean((predictions - targets) ** 2)
+        rmse = np.sqrt(mse)
+        all_metrics.append((mae, mse, rmse))
+
+        logging.info(f"\nError Metrics for {month}/{year}:")
+        logging.info(f"MAE: {mae:.4f}")
+        logging.info(f"MSE: {mse:.4f}")
+        logging.info(f"RMSE: {rmse:.4f}")
 
     # Plot results
-    plot_comparison(predictions, targets, start_x, start_y, area_size, output_dir)
-    logging.info(f"Saved visualization to {output_dir}")
-
-    # Calculate and log error metrics
-    mae = np.mean(np.abs(predictions - targets))
-    mse = np.mean((predictions - targets) ** 2)
-    rmse = np.sqrt(mse)
-
-    logging.info(f"\nError Metrics for area ({start_x}, {start_y}, {area_size}x{area_size}):")
-    logging.info(f"MAE: {mae:.4f}")
-    logging.info(f"MSE: {mse:.4f}")
-    logging.info(f"RMSE: {rmse:.4f}")
+    plot_comparison(all_predictions, all_targets, start_x, start_y, area_size, time_points, output_dir)
+    logging.info(f"Saved visualizations to {output_dir}")
 
 
 if __name__ == "__main__":
@@ -179,9 +228,13 @@ if __name__ == "__main__":
     parser.add_argument("--start-x", type=int, default=200, help="Starting X coordinate")
     parser.add_argument("--start-y", type=int, default=200, help="Starting Y coordinate")
     parser.add_argument("--area-size", type=int, default=100, help="Size of area to visualize")
+    parser.add_argument("--time-points", type=str, required=True, help="List of year,month pairs in format '2019,1;2019,2;2019,3'")
     parser.add_argument("--output-dir", type=str, default="visualization_results", help="Output directory for plots")
     parser.add_argument("--batch-size", type=int, default=32, help="Batch size for processing")
 
     args = parser.parse_args()
 
-    visualize_predictions(args.checkpoint, args.start_x, args.start_y, args.area_size, args.output_dir, args.batch_size)
+    # Parse time points from string
+    time_points = [tuple(map(int, tp.split(","))) for tp in args.time_points.split(";")]
+
+    visualize_predictions(args.checkpoint, args.start_x, args.start_y, args.area_size, time_points, args.output_dir, args.batch_size)
