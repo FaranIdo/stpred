@@ -1,4 +1,4 @@
-# STpred: Spatio-Temporal NDVI Prediction
+# stpred: Spatio-Temporal NDVI Prediction
 
 A deep learning framework for predicting vegetation indices (NDVI) using transformer-based models on satellite time series data.
 
@@ -11,37 +11,9 @@ STpred implements a spatio-temporal prediction model that forecasts future Norma
 - **Transformer Architecture**: Uses attention mechanisms to model complex spatio-temporal relationships
 - **Flexible Input**: Supports variable patch sizes (1x1 to 9x9) and sequence lengths 
 - **Multi-modal Data**: Incorporates NDVI values, temporal metadata (month, year), and spatial coordinates
-- **Large-scale Dataset**: Trained on Landsat NDVI data spanning 1984-2024
-- **GPU Acceleration**: Optimized for CUDA with mixed precision training
-- **Comprehensive Monitoring**: TensorBoard integration and detailed logging
+- **Large-scale Dataset**: Trained on Landsat NDVI data spanning 1984-2014
 
 ## Installation
-
-### Requirements
-
-The project requires Python 3.8+ and the following key dependencies:
-
-```bash
-# Core ML framework
-torch>=1.9.0
-torchvision
-tensorboard
-
-# Data processing  
-numpy
-pandas
-sklearn
-rasterio
-
-# Visualization and monitoring
-matplotlib
-tqdm
-pynvml
-
-# Geospatial data (optional, for data download)
-earthengine-api
-geemap
-```
 
 ### Setup
 
@@ -156,36 +128,6 @@ Model and training parameters are defined in `config.py`:
   - `MODEL_NUM_HEADS`: Attention heads (default: 8)
   - `MODEL_NUM_LAYERS`: Transformer layers (default: 3)
 
-## Folder Structure
-
-```
-stpred/
-├── README.md              # Project documentation
-├── config.py              # Configuration parameters
-├── train.py               # Main training script
-├── eval.py                # Model evaluation
-├── monitor.py             # System monitoring
-├── sanity.py              # Sanity checks
-├── visualize_results.py   # Results visualization
-├── model/                 # Model architecture
-│   ├── __init__.py
-│   ├── stpred.py         # Main SpatioTemporalPredictor model
-│   ├── transformer.py    # Transformer encoder implementation
-│   └── embedding.py      # Feature embedding layers
-├── dataset/               # Data processing utilities
-│   ├── download_ee_data.py    # Google Earth Engine data download
-│   ├── prepare_data.ipynb     # Data preparation notebook
-│   └── visualize.ipynb        # Data visualization notebook
-├── data/                  # Data directory (created during use)
-│   └── Landsat_NDVI_time_series_1984_to_2024.npy
-└── checkpoints/           # Training outputs (created during use)
-    └── [timestamp]_[name]/
-        ├── training.log   # Training logs
-        ├── eval.log      # Evaluation logs
-        ├── models/       # Model checkpoints
-        └── events.out.tfevents.*  # TensorBoard data
-```
-
 ## Model Architecture
 
 The STpred model consists of three main components:
@@ -213,33 +155,3 @@ The STpred model consists of three main components:
 - **Variable Sequences**: Random sequence lengths during training for robustness
 - **Spatial Augmentation**: Random patch sizes to improve generalization
 - **Mixed Precision**: Automatic mixed precision for faster training
-- **Gradient Accumulation**: Support for large effective batch sizes
-
-## Data Requirements
-
-The model expects preprocessed satellite data with the following characteristics:
-
-- **Temporal Coverage**: Multi-year time series (1984-2024 in the reference dataset)
-- **Spatial Resolution**: Regular grid with geographic coordinates
-- **Data Format**: 5-channel arrays (NDVI, month, year, latitude, longitude)
-- **File Format**: NumPy array saved as `.npy` file
-- **Missing Data**: Should be handled during preprocessing
-
-## Performance Notes
-
-- **GPU Requirements**: CUDA-capable GPU recommended (8GB+ VRAM)
-- **Memory Usage**: Scales with batch size and sequence length
-- **Training Time**: Varies by dataset size and hardware (hours to days)
-- **Checkpointing**: Automatic saving of best models by validation loss
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests if applicable
-5. Submit a pull request
-
-## License
-
-This project is available under the terms specified in the repository license.
