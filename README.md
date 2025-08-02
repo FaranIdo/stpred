@@ -1,6 +1,6 @@
-# stpred: Spatio-Temporal NDVI Prediction
+# SPATIO-TEMPORAL TRANSFORMERS FOR LONG TERM NDVI PREDICTION
 
-A deep learning framework for predicting vegetation indices (NDVI) using transformer-based models on satellite time series data.
+Official implementation of the paper "Spatio-Temporal Transformers for Long Term NDVI Prediction" (IGARSS 2025).
 
 ## Overview
 
@@ -155,3 +155,22 @@ The STpred model consists of three main components:
 - **Variable Sequences**: Random sequence lengths during training for robustness
 - **Spatial Augmentation**: Random patch sizes to improve generalization
 - **Mixed Precision**: Automatic mixed precision for faster training
+
+## Citation
+
+If you find this code useful for your research, please cite our paper:
+
+```bibtex
+@inproceedings{faran2025spatiotemporal,
+  title={Spatio-Temporal Transformers for Long Term NDVI Prediction},
+  author={Faran, Ido and Netanyahu, Nathan S. and Kizel, Fadi and Shoshany, Maxim},
+  booktitle={IGARSS 2025-2025 IEEE International Geoscience and Remote Sensing Symposium}
+  year={2025}
+}
+```
+
+## Contact
+
+For questions or feedback about this project, please contact:
+
+Ido Faran - [faranidof@gmail.com](mailto:faranidof@gmail.com)
